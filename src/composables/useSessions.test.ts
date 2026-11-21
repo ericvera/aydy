@@ -39,9 +39,6 @@ const list = (sessionCount: number, unreadCount: number): SessionList => ({
   groups: [],
   sessionCount,
   unreadCount,
-  portMove: null,
-  stale: null,
-  extensionConnected: false,
 })
 
 /**

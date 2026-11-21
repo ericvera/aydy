@@ -4,32 +4,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { afterEach, expect, it, vi } from 'vitest'
 
-import type { ExtensionStatus } from './types/ExtensionStatus'
 import type { JumpOutcome } from './types/JumpOutcome'
-import type { HookStatus } from './types/HookStatus'
-import type { PortMove } from './types/PortMove'
 import type { SessionGroup } from './types/SessionGroup'
 import type { SessionList } from './types/SessionList'
 import type { Settings } from './types/Settings'
-import type { StaleList } from './types/StaleList'
 import type { TrackingStatus } from './types/TrackingStatus'
 
 interface FakeChannel {
   onmessage: (list: SessionList) => void
-}
-
-const INSTALLED: HookStatus = {
-  installed: true,
-  hookCount: 5,
-  settingsPath: '~/.claude/settings.json',
-  receivingEvents: true,
-}
-
-const ABSENT: HookStatus = {
-  installed: false,
-  hookCount: 0,
-  settingsPath: '~/.claude/settings.json',
-  receivingEvents: false,
 }
 
 const TRACKING: TrackingStatus = { state: 'installed' }
@@ -47,11 +29,8 @@ interface Invocation {
 
 interface Answers {
   tracking: TrackingStatus
-  hooks: HookStatus
   settings: Settings
-  extension: ExtensionStatus
   jump: JumpOutcome
-  fails: Record<string, unknown>
 }
 
 const { channels, invoked, answers } = vi.hoisted(
@@ -60,20 +39,12 @@ const { channels, invoked, answers } = vi.hoisted(
     invoked: [],
     answers: {
       tracking: { state: 'installed' },
-      hooks: {
-        installed: true,
-        hookCount: 5,
-        settingsPath: '',
-        receivingEvents: true,
-      },
       settings: {
         finishedSound: true,
         needsInputSound: true,
         launchAtLogin: true,
       },
-      extension: { connected: false, windowCount: 0 },
       jump: 'jumped',
-      fails: {},
     },
   }),
 )
@@ -92,20 +63,8 @@ vi.mock('@tauri-apps/api/core', () => ({
   ): Promise<unknown> => {
     invoked.push({ command, args })
 
-    if (command in answers.fails) {
-      throw answers.fails[command]
-    }
-
     if (command === 'tracking_status') {
       return answers.tracking
-    }
-
-    if (command === 'hook_status') {
-      return answers.hooks
-    }
-
-    if (command === 'extension_status') {
-      return answers.extension
     }
 
     if (command === 'jump_to_session') {
@@ -120,20 +79,10 @@ const list = (
   sessionCount: number,
   unreadCount: number,
   groups: SessionGroup[] = [],
-  health: {
-    portMove?: PortMove
-    stale?: StaleList
-    extensionConnected?: boolean
-  } = {},
 ): SessionList => ({
   groups,
   sessionCount,
   unreadCount,
-  portMove: health.portMove ?? null,
-  stale: health.stale ?? null,
-  // Connected unless a test is about the prompt, so that the offer of the
-  // extension only shows up in the assertions that are looking for it.
-  extensionConnected: health.extensionConnected ?? true,
 })
 
 const okvenMain: SessionGroup = {
@@ -177,17 +126,12 @@ afterEach(() => {
  */
 const popover = async (
   tracking: TrackingStatus = TRACKING,
-  fails: Record<string, unknown> = {},
 ): Promise<VueWrapper> => {
   channels.length = 0
   invoked.length = 0
   answers.tracking = tracking
-  answers.hooks = INSTALLED
   answers.settings = SETTINGS
-  answers.extension = { connected: false, windowCount: 0 }
   answers.jump = 'jumped'
-  answers.fails = fails
-  window.localStorage.clear()
   vi.resetModules()
 
   const App = (await import('./App.vue')).default
@@ -208,21 +152,6 @@ const showing = async (snapshot: SessionList): Promise<VueWrapper> => {
   await nextTick()
 
   return wrapper
-}
-
-const pressLabelled = async (
-  wrapper: VueWrapper,
-  label: string,
-): Promise<void> => {
-  const button = wrapper
-    .findAll('button')
-    .find((candidate) => candidate.text() === label)
-
-  if (button === undefined) {
-    throw new Error(`there is no button labelled ${label}`)
-  }
-
-  await button.trigger('click')
 }
 
 const text = async (snapshot: SessionList): Promise<string> =>
@@ -410,71 +339,6 @@ it('takes the jump notice away when it is dismissed', async () => {
 })
 
 /**
- * A companion nobody hears about does not get installed, and several
- * behaviours degrade quietly without it.
- */
-it('offers the companion extension while no window is reporting', async () => {
-  const wrapper = await showing(
-    list(1, 0, [okvenMain], { extensionConnected: false }),
-  )
-
-  expect(renderedText(wrapper.element)).toContain('Add the VS Code extension')
-})
-
-/**
- * Windows register seconds after the editor starts, which is why this rides on
- * the snapshot: an answer taken once when the popover was built would offer
- * the extension to people who already have it.
- */
-it('stops offering the extension once a window reports', async () => {
-  const wrapper = await showing(
-    list(1, 0, [okvenMain], { extensionConnected: false }),
-  )
-  expect(renderedText(wrapper.element)).toContain('Add the VS Code extension')
-
-  channels[0]?.onmessage(list(1, 0, [okvenMain], { extensionConnected: true }))
-  await nextTick()
-
-  expect(renderedText(wrapper.element)).not.toContain(
-    'Add the VS Code extension',
-  )
-})
-
-/** Offered once. A prompt that came back every launch would be a nag. */
-it('never offers the extension again once it has been waved off', async () => {
-  const wrapper = await showing(
-    list(1, 0, [okvenMain], { extensionConnected: false }),
-  )
-
-  await wrapper.get('[aria-label="Dismiss"]').trigger('click')
-  await nextTick()
-
-  expect(renderedText(wrapper.element)).not.toContain(
-    'Add the VS Code extension',
-  )
-  expect(window.localStorage.getItem('aydy.extension-prompt-dismissed')).toBe(
-    'yes',
-  )
-})
-
-/**
- * The stale list is the app saying it cannot see what is running, which is no
- * moment to suggest an improvement to how well it works.
- */
-it('does not offer the extension over a stale list', async () => {
-  const wrapper = await showing(
-    list(0, 0, [], {
-      extensionConnected: false,
-      stale: { sessionCount: 3, lastSeenAgoMs: 360_000 },
-    }),
-  )
-
-  expect(renderedText(wrapper.element)).not.toContain(
-    'Add the VS Code extension',
-  )
-})
-
-/**
  * Quit lives in the list footer and only there — no other screen carries one.
  */
 it('quits from the footer', async () => {
@@ -577,7 +441,6 @@ it('shows neither screen until tracking has been read', async () => {
   channels.length = 0
   invoked.length = 0
   answers.tracking = TRACKING
-  answers.fails = {}
   vi.resetModules()
 
   const App = (await import('./App.vue')).default
@@ -589,80 +452,6 @@ it('shows neither screen until tracking has been read', async () => {
   await flushPromises()
 
   expect(renderedText(wrapper.element)).not.toBe('')
-})
-
-/**
- * The move is already made and the hooks already rewritten, so the notice sits
- * above whatever the list actually contains rather than replacing it.
- */
-it('shows the port move above the list', async () => {
-  const wrapper = await showing(
-    list(1, 0, [okvenMain], { portMove: { from: 47_823, to: 47_824 } }),
-  )
-
-  expect(renderedText(wrapper.element)).toContain(
-    'Port 47823 was taken, so AYDY moved to 47824 and updated its hooks.',
-  )
-  expect(wrapper.findComponent({ name: 'SessionList' }).exists()).toBe(true)
-})
-
-it('shows no port move notice when the listener never moved', async () => {
-  const wrapper = await showing(list(1, 0, [okvenMain]))
-
-  expect(wrapper.findComponent({ name: 'PortMoveNotice' }).exists()).toBe(false)
-})
-
-/**
- * A list that is not being updated must not be presented as current, and an
- * empty one would read as "nothing is running".
- */
-it('replaces the list with the stale notice while events are going nowhere', async () => {
-  const wrapper = await showing(
-    list(0, 0, [], { stale: { sessionCount: 3, lastSeenAgoMs: 360_000 } }),
-  )
-
-  expect(renderedText(wrapper.element)).toContain(
-    'Last seen 3 sessions, 6m ago',
-  )
-  expect(wrapper.findComponent({ name: 'EmptyState' }).exists()).toBe(false)
-})
-
-/**
- * The header carries the live count and the stale notice carries the frozen
- * one, so a header left counting contradicts the notice under it: the
- * reconciler goes on reaping sessions on its own scan while events cannot
- * reach the app, and the live count drains to zero during the spell.
- */
-it('heads the stale list with the state rather than a count that has drained away', async () => {
-  const wrapper = await showing(
-    list(0, 0, [], { stale: { sessionCount: 3, lastSeenAgoMs: 360_000 } }),
-  )
-
-  const rendered = renderedText(wrapper.element)
-
-  expect(rendered).toContain('Reconnecting')
-  expect(rendered).not.toContain('No sessions')
-})
-
-/**
- * The stale treatment cannot apply before tracking exists: nothing is being
- * recorded then, so nothing is being lost, and a fresh install would otherwise
- * present itself as broken.
- */
-it('does not call the list stale before tracking is installed', async () => {
-  const wrapper = await popover({ state: 'notInstalled' })
-
-  channels[0]?.onmessage(
-    list(0, 0, [], { stale: { sessionCount: 3, lastSeenAgoMs: 360_000 } }),
-  )
-  await nextTick()
-
-  expect(wrapper.findComponent({ name: 'StaleListNotice' }).exists()).toBe(
-    false,
-  )
-  expect(renderedText(wrapper.element)).toContain(
-    'Install the AYDY extension in VS Code',
-  )
 })
 
 /**
@@ -715,32 +504,13 @@ it('reads tracking again when settings opens', async () => {
   ).toHaveLength(2)
 })
 
-/**
- * Task 4.2 built this row against a permanent placeholder, because nothing
- * reported anything yet. It is read when the pane opens rather than kept up to
- * date: a VS Code window closing announces nothing, so the only moment the row
- * has to be right is the moment someone is looking at it.
- */
-it('reports the companion extension as connected once a window has registered', async () => {
-  const wrapper = await showing(list(0, 0))
-  answers.extension = { connected: true, windowCount: 2 }
-
-  await wrapper.get('[aria-label="Settings"]').trigger('click')
-  await flushPromises()
-
-  expect(invoked.map((call) => call.command)).toContain('extension_status')
-  expect(renderedText(wrapper.element)).toContain('VS Code extension Connected')
-})
-
-it('reports the companion extension as not connected while no window has', async () => {
+it('reports session tracking as installed in settings', async () => {
   const wrapper = await showing(list(0, 0))
 
   await wrapper.get('[aria-label="Settings"]').trigger('click')
   await flushPromises()
 
-  expect(renderedText(wrapper.element)).toContain(
-    'VS Code extension Not connected',
-  )
+  expect(renderedText(wrapper.element)).toContain('Session tracking Installed')
 })
 
 it('sends a setting that moved in the pane to Rust', async () => {
@@ -755,82 +525,4 @@ it('sends a setting that moved in the pane to Rust', async () => {
     command: 'update_settings',
     args: { change: { launchAtLogin: false } },
   })
-})
-
-/**
- * REQ-RESIL-7. Removing the hooks does not end the app, and the pane closes
- * rather than staying up to manage hooks that are no longer there.
- */
-it('closes the pane when the hooks are removed, without quitting', async () => {
-  const wrapper = await showing(list(0, 0))
-  await wrapper.get('[aria-label="Settings"]').trigger('click')
-  await flushPromises()
-
-  answers.hooks = ABSENT
-  await pressLabelled(wrapper, 'Remove hooks')
-  await flushPromises()
-
-  expect(invoked.map((call) => call.command)).toContain('uninstall_hooks')
-  expect(invoked.map((call) => call.command)).not.toContain('quit')
-  expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(false)
-})
-
-/**
- * A removal that failed must not read as one that worked. `uninstall()` records
- * the reason rather than rejecting, so a pane that closed regardless would give
- * the failure the same disappearing pane a success gives — while the hooks were
- * still installed and the banner saying the file was left alone never appeared.
- */
-it('keeps the pane up, with the reason, when the removal failed', async () => {
-  const wrapper = await popover(TRACKING, {
-    uninstall_hooks: { reason: 'The file changed while AYDY was writing it.' },
-  })
-  await wrapper.get('[aria-label="Settings"]').trigger('click')
-  await flushPromises()
-
-  await pressLabelled(wrapper, 'Remove hooks')
-  await flushPromises()
-
-  const rendered = renderedText(wrapper.element)
-
-  expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(true)
-  expect(rendered).toContain('Nothing in ~/.claude/settings.json was modified.')
-  expect(rendered).toContain('The file changed while AYDY was writing it.')
-})
-
-/**
- * The popover's DOM is never unmounted — it hides on focus loss — so a status
- * read once at launch is what a process up for days would still be showing. The
- * listener dying or its port moving in between would leave the pane reporting
- * that events are arriving while the list beside it carries the stale notice.
- */
-it('reads the hook status again each time settings opens', async () => {
-  const wrapper = await showing(list(0, 0))
-  await wrapper.get('[aria-label="Settings"]').trigger('click')
-  await flushPromises()
-  await wrapper.get('[aria-label="Close settings"]').trigger('click')
-
-  answers.hooks = { ...INSTALLED, receivingEvents: false }
-  await wrapper.get('[aria-label="Settings"]').trigger('click')
-  await flushPromises()
-
-  expect(invoked.filter((call) => call.command === 'hook_status')).toHaveLength(
-    2,
-  )
-  expect(renderedText(wrapper.element)).toContain('Not receiving events')
-})
-
-it('repairs the hooks from the pane and reads the file back', async () => {
-  const wrapper = await showing(list(0, 0))
-  await wrapper.get('[aria-label="Settings"]').trigger('click')
-  await flushPromises()
-
-  await pressLabelled(wrapper, 'Reinstall')
-  await flushPromises()
-
-  expect(invoked.map((call) => call.command).slice(-2)).toStrictEqual([
-    'reinstall_hooks',
-    'hook_status',
-  ])
-  expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(true)
 })
