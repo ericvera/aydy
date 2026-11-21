@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs'
+
 import * as vscode from 'vscode'
 
 import type { WindowFacts } from './aydyClient'
@@ -13,6 +15,8 @@ import {
 import { ensureHooks, installHookScript } from './hookInstall'
 import type { RevealEnvironment, RevealRequest } from './revealSession'
 import { revealSession } from './revealSession'
+import { publishWindow, unpublishWindow } from './windowRegistry'
+import { WindowTracker } from './windowTracker'
 
 /**
  * The Claude Code extension, whose version this integration is pinned against.
@@ -55,6 +59,29 @@ const claudeCodeVersion = (): string | null =>
   versionOf(vscode.extensions.getExtension(CLAUDE_CODE_EXTENSION)?.packageJSON)
 
 let client: AydyClient | undefined
+
+let unreadCount = 0
+
+export const currentUnreadCount = (): number => unreadCount
+
+const localFolders = (): string[] =>
+  (vscode.workspace.workspaceFolders ?? [])
+    .filter((folder) => folder.uri.scheme === 'file')
+    .map((folder) => {
+      try {
+        return realpathSync(folder.uri.fsPath)
+      } catch {
+        return folder.uri.fsPath
+      }
+    })
+
+const publish = (folders: string[]): void => {
+  publishWindow(process.pid, folders).catch(() => undefined)
+}
+
+const unpublish = async (): Promise<void> => {
+  await unpublishWindow(process.pid).catch(() => undefined)
+}
 
 const windowFacts = (): WindowFacts => ({
   pid: process.pid,
@@ -180,8 +207,29 @@ export const activate = (context: vscode.ExtensionContext): void => {
     focus.report(focusState())
   }
 
+  let folders = localFolders()
+  publish(folders)
+  const tracker = new WindowTracker({
+    pid: process.pid,
+    folders: () => folders,
+    focused: () => vscode.window.state.focused,
+    onCount: (count) => {
+      unreadCount = count
+    },
+  })
+
   client = started
   context.subscriptions.push(
+    { dispose: () => void unpublish() },
+    tracker,
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      folders = localFolders()
+      publish(folders)
+      tracker.poke()
+    }),
+    vscode.window.onDidChangeWindowState(() => {
+      tracker.poke()
+    }),
     {
       dispose: () => {
         focus.dispose()
@@ -206,11 +254,13 @@ export const activate = (context: vscode.ExtensionContext): void => {
   )
 
   void started.start()
+  void tracker.start()
   reportFocus()
 }
 
 /** Tells AYDY this window has gone, rather than leaving it to time out. */
 export const deactivate = async (): Promise<void> => {
+  await unpublish()
   await client?.close()
   client = undefined
 }
