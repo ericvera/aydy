@@ -5,7 +5,7 @@ import { ref } from 'vue'
 import type { JumpOutcome } from '../types/JumpOutcome'
 
 /** The outcomes the user is told about, as opposed to acted on. */
-type JumpFailure = Extract<JumpOutcome, 'unconfirmed' | 'duplicated'>
+type JumpFailure = Extract<JumpOutcome, 'unanswered' | 'duplicated'>
 
 // Module scoped, like the other composables, so the notice and the list are
 // looking at one answer.
@@ -28,9 +28,10 @@ interface Jump {
 /**
  * Going to the session behind a row.
  *
- * A jump is asked for and then found out about: Rust reveals the tab, raises
- * the window and waits for the window itself to say it came forward, so this
- * waits for an answer rather than firing and forgetting. The wait is invisible
+ * A jump is asked for and then found out about: Rust writes a request file,
+ * waits for the window that owns the session to reveal its tab and answer, and
+ * raises what that answer names, so this waits for an answer rather than
+ * firing and forgetting. The wait is invisible
  * in the ordinary case, because a window coming forward takes focus from the
  * popover and the popover hides on focus loss.
  *
@@ -46,12 +47,12 @@ export const useJump = (): Jump => {
     try {
       outcome = await invoke<JumpOutcome>('jump_to_session', { sessionId })
     } catch {
-      // A jump that could not even be asked for is a jump nothing confirmed,
+      // A jump that could not even be asked for is a jump no window answered,
       // and claiming otherwise is the failure this whole path exists to avoid.
-      outcome = 'unconfirmed'
+      outcome = 'unanswered'
     }
 
-    if (outcome === 'unconfirmed' || outcome === 'duplicated') {
+    if (outcome === 'unanswered' || outcome === 'duplicated') {
       failure.value = outcome
 
       return false

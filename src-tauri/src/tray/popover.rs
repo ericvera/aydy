@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
 use tauri_plugin_positioner::{Position, WindowExt};
 
-use crate::listener::server::lock_recovering;
+use crate::sync::lock_recovering;
 
 /// The label of the popover window, as declared in `tauri.conf.json`.
 pub const POPOVER_LABEL: &str = "popover";

@@ -13,12 +13,14 @@
  * can do, and it happens silently. Everything in this file exists to make that
  * impossible:
  *
- * - AYDY only ever addresses the window its process-tree join placed the
- *   session in, and the window checks that the command was addressed to it.
- * - The tab has to be **here**, matched by the label AYDY expects it to carry,
- *   before the command is called at all. A session hosted in the sidebar is a
- *   view rather than a tab and never matches, which is the right answer: it has
- *   no tab to reveal.
+ * - Only the window that owns the session claims the jump request, by
+ *   unlinking it: the window whose folder most specifically contains the
+ *   session's launch directory, among the windows published under
+ *   `<data>/windows/`.
+ * - The tab has to be **here**, matched by the label the request says it
+ *   carries, before the command is called at all. A session hosted in the
+ *   sidebar is a view rather than a tab and never matches, which is the right
+ *   answer: it has no tab to reveal.
  * - The call is only trusted on a Claude Code release the argument order has
  *   been read out of. That order is undocumented and was taken from a minified
  *   bundle that ships roughly weekly.
@@ -58,6 +60,24 @@ const VERIFIED_LINE = `${VERIFIED_CLAUDE_CODE_VERSION.split('.').slice(0, 2).joi
  * this answer.
  */
 const TAB_SETTLE_MS = 120
+
+/**
+ * The version an extension manifest declares, or `null` when it declares none.
+ *
+ * `packageJSON` is whatever the extension shipped, so nothing about its shape
+ * can be assumed — the Claude Code integration depends on the internals of a
+ * bundle that ships roughly weekly, and a manifest that has changed must leave
+ * the reveal refusing (`unexpectedVersion`) rather than throwing.
+ */
+export const versionOf = (packageJson: unknown): string | null => {
+  if (typeof packageJson !== 'object' || packageJson === null) {
+    return null
+  }
+
+  const version = (packageJson as { version?: unknown }).version
+
+  return typeof version === 'string' && version.length > 0 ? version : null
+}
 
 /** What this window did about a reveal. */
 export type RevealOutcome =
@@ -134,9 +154,9 @@ export const revealSession = async (
     try {
       await environment.open(request.sessionId)
     } catch {
-      // Answered rather than thrown. A command that raised is still a command
-      // that may have opened something, and letting it escape would leave AYDY
-      // treating this window as unreachable and dropping its registration.
+      // Answered as `failed` rather than thrown: a command that raised may
+      // still have opened something, and the jump responder must always be
+      // able to write a reply.
       failed = true
     }
 

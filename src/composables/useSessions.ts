@@ -8,9 +8,6 @@ const EMPTY_LIST: SessionList = {
   groups: [],
   sessionCount: 0,
   unreadCount: 0,
-  portMove: null,
-  stale: null,
-  extensionConnected: false,
 }
 
 // Module scoped, so every component reads the same list and the popover holds

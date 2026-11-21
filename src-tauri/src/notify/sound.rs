@@ -6,6 +6,11 @@
 //! gave nothing back would leave the user worse off than before they had the
 //! app. They are deliberately the same two files those hooks played, so the
 //! takeover is invisible rather than something to relearn.
+//!
+//! A sound plays only for a session that is still unread when its transition
+//! is observed. A notifier built with [`SoundNotifier::unarmed`] also plays
+//! nothing until [`SoundNotifier::arm`] has been called and one baseline
+//! observation has followed, so state loaded at startup is never announced.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -17,12 +22,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 use crate::clock::Clock;
-use crate::listener::server::lock_recovering;
 use crate::notify::{transition_alert, Alert};
 use crate::session::event::SessionId;
 use crate::session::registry::RegistrySnapshot;
 use crate::session::status::SessionStatus;
 use crate::settings::store::Settings;
+use crate::sync::lock_recovering;
 
 /// The player the removed hooks used, by absolute path.
 ///
@@ -158,16 +163,28 @@ fn transition_sound(previous: Option<SessionStatus>, status: SessionStatus) -> O
 }
 
 /// What one observation has to remember for the next one to mean anything.
-#[derive(Default)]
 struct NotifierState {
     /// The status each session was in at the previous observation. A session
     /// missing from here has never been observed.
     previous: HashMap<SessionId, SessionStatus>,
     /// When each sound last played.
     last_played: HashMap<Sound, Instant>,
+    /// Whether observations may earn sounds at all.
+    armed: bool,
+    /// Whether the next observation is the baseline that arms the notifier.
+    baseline_pending: bool,
 }
 
 impl NotifierState {
+    fn new(armed: bool) -> Self {
+        Self {
+            previous: HashMap::new(),
+            last_played: HashMap::new(),
+            armed,
+            baseline_pending: false,
+        }
+    }
+
     /// Whether `sound` may play now, recording it when it may.
     ///
     /// Only an actual play starts a quiet window, so a sound the user has
@@ -194,26 +211,64 @@ pub struct SoundNotifier {
 
 impl SoundNotifier {
     /// A notifier that plays through `player`, reading the settings as they are
-    /// pushed rather than by asking for them.
+    /// pushed rather than by asking for them. It is armed from the start.
     pub fn new(
         player: Arc<dyn SoundPlayer>,
         settings: watch::Receiver<Settings>,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        Self::with_state(player, settings, clock, NotifierState::new(true))
+    }
+
+    /// A notifier like [`SoundNotifier::new`] that stays quiet until
+    /// [`SoundNotifier::arm`].
+    pub fn unarmed(
+        player: Arc<dyn SoundPlayer>,
+        settings: watch::Receiver<Settings>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self::with_state(player, settings, clock, NotifierState::new(false))
+    }
+
+    fn with_state(
+        player: Arc<dyn SoundPlayer>,
+        settings: watch::Receiver<Settings>,
+        clock: Arc<dyn Clock>,
+        state: NotifierState,
+    ) -> Self {
         Self {
             player,
             settings,
             clock,
-            state: Mutex::new(NotifierState::default()),
+            state: Mutex::new(state),
+        }
+    }
+
+    /// Lets sounds play for changes after the next observation, which is taken
+    /// as the baseline. Does nothing to a notifier that is already armed.
+    pub fn arm(&self) {
+        let mut state = lock_recovering(&self.state);
+
+        if !state.armed {
+            state.baseline_pending = true;
         }
     }
 
     /// Plays whatever the difference between this snapshot and the previous one
-    /// earns.
+    /// earns, for sessions that are still unread.
+    ///
+    /// Before [`SoundNotifier::arm`], and for the baseline observation after
+    /// it, the statuses are remembered and nothing is earned.
     pub fn observe(&self, snapshot: &RegistrySnapshot) {
         let settings = *self.settings.borrow();
         let now = self.clock.now();
         let mut state = lock_recovering(&self.state);
+        let earning = state.armed;
+
+        if state.baseline_pending {
+            state.armed = true;
+            state.baseline_pending = false;
+        }
 
         let mut previous = HashMap::with_capacity(snapshot.session_count);
         let mut earned: HashSet<Sound> = HashSet::new();
@@ -226,16 +281,18 @@ impl SoundNotifier {
             let was = state.previous.get(&session.id).copied();
             previous.insert(session.id.clone(), session.status);
 
+            if !earning {
+                continue;
+            }
+
             let Some(sound) = transition_sound(was, session.status) else {
                 continue;
             };
 
-            // The registry owns the whole of this rule, and it is asked rather
-            // than re-derived here: a session is the current one only when it
-            // owns the active tab **and** that tab's window has focus. A tab
-            // left active in a window the user has walked away from still
-            // sounds, which is the case the app exists for.
-            if session.is_current {
+            // The registry owns the unread rule, and it is asked rather than
+            // re-derived here. A session already seen when its transition is
+            // observed is one the user is looking at.
+            if !session.unread {
                 continue;
             }
 
@@ -350,25 +407,34 @@ mod tests {
     use super::test_support::{Answer, RecordingPlayer};
     use super::*;
     use crate::clock::TestClock;
-    use crate::session::event::{FocusReport, HookEvent, HookEventKind, WindowId};
+    use crate::discovery::status_files::StatusRecord;
+    use crate::session::event::{
+        DiscoveredSession, HookEvent, HookEventKind, ReconciliationResult,
+    };
     use crate::session::registry::SessionRegistry;
 
-    /// A VS Code window, named by the process id of its extension host.
-    const WINDOW: WindowId = 65_921;
+    /// [`SoundNotifier::new`] or [`SoundNotifier::unarmed`].
+    type Constructor =
+        fn(Arc<dyn SoundPlayer>, watch::Receiver<Settings>, Arc<dyn Clock>) -> SoundNotifier;
+
+    /// The wall-clock ms the harness dates its first status record at.
+    const START_MS: u64 = 1_790_000_000_000;
 
     /// A real registry with a notifier watching it, driven exactly as the
     /// publishing loop drives them: apply events, take a snapshot, hand it over.
     ///
     /// The registry is real rather than a hand-built snapshot because the
-    /// suppression rule this task must honour lives there — asking it is the
-    /// whole point, and a hand-built `is_current` would only assert that this
-    /// module can read a boolean it set itself.
+    /// unread rule the notifier honours lives there, and a hand-built `unread`
+    /// flag would only assert that this module can read a boolean it set
+    /// itself.
     struct Harness {
         registry: SessionRegistry,
         notifier: SoundNotifier,
         player: Arc<RecordingPlayer>,
         settings: watch::Sender<Settings>,
         clock: Arc<TestClock>,
+        /// The wall-clock ms of the latest status record or seen time.
+        now_ms: u64,
     }
 
     impl Harness {
@@ -377,13 +443,21 @@ mod tests {
         }
 
         fn playing(answer: Answer) -> Self {
+            Self::built(answer, SoundNotifier::new)
+        }
+
+        fn unarmed() -> Self {
+            Self::built(Answer::Played, SoundNotifier::unarmed)
+        }
+
+        fn built(answer: Answer, notifier: Constructor) -> Self {
             let clock = Arc::new(TestClock::new());
             let player = Arc::new(RecordingPlayer::answering(answer));
             let (settings, receiver) = watch::channel(Settings::default());
 
             Self {
                 registry: SessionRegistry::new(Arc::clone(&clock) as Arc<dyn Clock>),
-                notifier: SoundNotifier::new(
+                notifier: notifier(
                     Arc::clone(&player) as Arc<dyn SoundPlayer>,
                     receiver,
                     Arc::clone(&clock) as Arc<dyn Clock>,
@@ -391,20 +465,27 @@ mod tests {
                 player,
                 settings,
                 clock,
+                now_ms: START_MS,
             }
         }
 
+        /// One status record, written a moment after the previous one and read
+        /// the moment it was written, as the feed delivers it.
         fn hook(&mut self, session_id: &str, kind: HookEventKind) {
-            self.registry
-                .apply_hook_event(HookEvent::new(session_id, kind));
+            self.now_ms += 1;
+            self.registry.apply_status(
+                StatusRecord {
+                    event: HookEvent::new(session_id, kind),
+                    written_at_ms: self.now_ms,
+                },
+                self.now_ms,
+            );
         }
 
-        fn focus(&mut self, window_id: WindowId, focused: bool, active: Option<&str>) {
-            self.registry.apply_focus_report(FocusReport::new(
-                window_id,
-                focused,
-                active.map(str::to_string),
-            ));
+        /// The session's seen file, written after everything applied so far.
+        fn see(&mut self, session_id: &str) {
+            self.now_ms += 1;
+            self.registry.apply_seen(session_id, self.now_ms);
         }
 
         /// One observation, far enough after the last one that the quiet window
@@ -630,71 +711,6 @@ mod tests {
         assert_eq!(harness.asked(), Vec::new());
     }
 
-    #[test]
-    fn a_session_whose_tab_is_active_in_a_focused_window_stays_silent() {
-        let mut harness = Harness::new();
-        harness.working("session-1");
-        harness.focus(WINDOW, true, Some("session-1"));
-
-        harness.hook("session-1", HookEventKind::Stop);
-        harness.observe();
-
-        assert_eq!(harness.asked(), Vec::new());
-    }
-
-    #[test]
-    fn a_session_whose_tab_is_active_in_a_focused_window_stays_silent_when_it_needs_input() {
-        let mut harness = Harness::new();
-        harness.working("session-1");
-        harness.focus(WINDOW, true, Some("session-1"));
-
-        harness.hook("session-1", needs_input());
-        harness.observe();
-
-        assert_eq!(harness.asked(), Vec::new());
-    }
-
-    /// The half of the suppression rule that must not be collapsed. A tab left
-    /// active in a window the user has walked away from is exactly the case
-    /// AYDY exists for, and silencing it would be worse than not playing at all.
-    #[test]
-    fn a_session_whose_tab_is_active_in_an_unfocused_window_still_sounds() {
-        let mut harness = Harness::new();
-        harness.working("session-1");
-        harness.focus(WINDOW, false, Some("session-1"));
-
-        harness.hook("session-1", HookEventKind::Stop);
-        harness.observe();
-
-        assert_eq!(harness.asked(), vec![Sound::Finished]);
-    }
-
-    #[test]
-    fn a_session_whose_tab_is_active_in_an_unfocused_window_still_sounds_when_it_needs_input() {
-        let mut harness = Harness::new();
-        harness.working("session-1");
-        harness.focus(WINDOW, false, Some("session-1"));
-
-        harness.hook("session-1", needs_input());
-        harness.observe();
-
-        assert_eq!(harness.asked(), vec![Sound::NeedsInput]);
-    }
-
-    /// The other half: focus alone is not enough either. The user is looking at
-    /// one tab, not at every session open in that window.
-    #[test]
-    fn a_session_in_a_background_tab_of_a_focused_window_still_sounds() {
-        let mut harness = Harness::new();
-        harness.working("session-1");
-        harness.focus(WINDOW, true, Some("session-2"));
-
-        harness.hook("session-1", HookEventKind::Stop);
-        harness.observe();
-
-        assert_eq!(harness.asked(), vec![Sound::Finished]);
-    }
-
     /// Without the companion extension no tab is ever reported active, so every
     /// transition sounds. That is the expected state, not a degraded one.
     #[test]
@@ -708,40 +724,99 @@ mod tests {
         assert_eq!(harness.asked(), vec![Sound::Finished]);
     }
 
-    /// A transition the user watched has still happened, so the status it
-    /// arrived at is what the next observation compares against. Holding the
-    /// status from before it would sound the moment they looked away.
     #[test]
-    fn a_suppressed_transition_does_not_sound_when_the_window_later_loses_focus() {
+    fn a_session_already_seen_when_it_finishes_stays_silent() {
         let mut harness = Harness::new();
         harness.working("session-1");
-        harness.focus(WINDOW, true, Some("session-1"));
-        harness.hook("session-1", HookEventKind::Stop);
-        harness.observe();
 
-        harness.focus(WINDOW, false, Some("session-1"));
+        harness.hook("session-1", HookEventKind::Stop);
+        harness.see("session-1");
         harness.observe();
 
         assert_eq!(harness.asked(), Vec::new());
     }
 
-    /// The other direction of the same rule. Forgetting a session because the
-    /// user was watching it would make its next transition look like a first
-    /// sighting, and a first sighting earns nothing — so the sound after the
-    /// one that was rightly suppressed would be swallowed too.
     #[test]
-    fn a_suppressed_transition_leaves_the_next_one_audible() {
+    fn an_unread_session_that_finishes_sounds() {
         let mut harness = Harness::new();
         harness.working("session-1");
-        harness.focus(WINDOW, true, Some("session-1"));
+        harness.see("session-1");
+
         harness.hook("session-1", HookEventKind::Stop);
         harness.observe();
 
-        harness.focus(WINDOW, false, None);
+        assert_eq!(harness.asked(), vec![Sound::Finished]);
+    }
+
+    /// A transition the user saw has still happened, so the status it arrived
+    /// at is what the next observation compares against, and the next unread
+    /// transition is not mistaken for a first sighting.
+    #[test]
+    fn a_session_seen_after_it_finished_stays_silent_and_its_next_wait_sounds() {
+        let mut harness = Harness::new();
+        harness.working("session-1");
+        harness.hook("session-1", HookEventKind::Stop);
+        harness.see("session-1");
+        harness.observe();
+        harness.observe();
+
         harness.hook("session-1", needs_input());
         harness.observe();
 
         assert_eq!(harness.asked(), vec![Sound::NeedsInput]);
+    }
+
+    /// The case arming exists for: the scan sees a session as Unknown, and the
+    /// status file replayed at launch then makes it Done.
+    #[test]
+    fn an_unarmed_notifier_plays_nothing_before_it_is_armed() {
+        let mut harness = Harness::unarmed();
+        harness.registry.apply_reconciliation(ReconciliationResult {
+            present: vec![DiscoveredSession::new("session-1")],
+            gone: Vec::new(),
+        });
+        harness.observe();
+
+        harness.hook("session-1", HookEventKind::Stop);
+        harness.observe();
+
+        assert_eq!(harness.asked(), Vec::new());
+    }
+
+    #[test]
+    fn the_first_observation_after_arming_is_a_baseline() {
+        let mut harness = Harness::unarmed();
+        harness.working("session-1");
+
+        harness.hook("session-1", HookEventKind::Stop);
+        harness.notifier.arm();
+        harness.observe();
+
+        assert_eq!(harness.asked(), Vec::new());
+    }
+
+    #[test]
+    fn a_transition_after_the_baseline_plays() {
+        let mut harness = Harness::unarmed();
+        harness.working("session-1");
+        harness.notifier.arm();
+        harness.observe();
+
+        harness.hook("session-1", HookEventKind::Stop);
+        harness.observe();
+
+        assert_eq!(harness.asked(), vec![Sound::Finished]);
+    }
+
+    #[test]
+    fn a_notifier_built_with_new_plays_the_first_transition_without_arming() {
+        let mut harness = Harness::new();
+        harness.working("session-1");
+
+        harness.hook("session-1", HookEventKind::Stop);
+        harness.observe();
+
+        assert_eq!(harness.asked(), vec![Sound::Finished]);
     }
 
     #[test]

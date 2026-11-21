@@ -22,12 +22,11 @@ const detailText = (wrapper: VueWrapper): string =>
  * took them out, and they are on hover instead.
  */
 it('shows a status dot and a title and nothing else', () => {
-  expect(row({ label: 'Fix permission denied for code command' }).html())
-    .toMatchInlineSnapshot(`
-      "<button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-read min-w-0 flex-1">Fix permission denied for code command</span>
-        <!--v-if--></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span>
-      </button>"
-    `)
+  expect(
+    row({ label: 'Fix permission denied for code command' }).html(),
+  ).toMatchInlineSnapshot(
+    `"<button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-read min-w-0 flex-1">Fix permission denied for code command</span></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span></button>"`,
+  )
 })
 
 it('keeps the durations and the status text off the row until it is hovered', () => {
@@ -145,17 +144,9 @@ it('draws a row that cannot be jumped to differently from one that can', () => {
 })
 
 /**
- * The sole exception to the one-dot-and-a-title rule: the session the user is
- * actually in says so.
+ * The app no longer hears which window has focus, so no row claims to be the
+ * session the user is in.
  */
-it('marks the session the user is currently in', () => {
-  expect(renderedText(row({ isCurrent: true }).element)).toBe(
-    'Review attribution mock data test file you are here',
-  )
-})
-
-it('leaves every other row unmarked', () => {
-  expect(renderedText(row({ isCurrent: false }).element)).toBe(
-    'Review attribution mock data test file',
-  )
+it('never marks a row as the session the user is in', () => {
+  expect(renderedText(row().element)).not.toContain('you are here')
 })

@@ -14,7 +14,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 libc = "0.2.189"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
@@ -22,10 +21,7 @@ tauri = { version = "2.11.5", features = ["image-png", "macos-private-api", "tra
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-positioner = { version = "2.3.3", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2.4.3"
-tokio = { version = "1.53.1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
-# A blocking HTTP client for the loopback commands sent to the companion
-# extension. Plain HTTP to 127.0.0.1 only, so no TLS.
-ureq = { version = "3.3.0", default-features = false }
+tokio = { version = "1.53.1", default-features = false, features = ["macros", "rt", "sync", "time"] }
 
 [profile.release]
 codegen-units = 1

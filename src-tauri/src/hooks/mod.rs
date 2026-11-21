@@ -1,20 +1,15 @@
-//! Registering AYDY's hooks in the user's Claude Code settings.
+//! The user's Claude Code settings, and the cleanup of the hook entries older
+//! AYDY versions registered in them.
 //!
 //! The file being edited is `~/.claude/settings.json`, and it belongs to the
-//! user, not to AYDY. Everything outside the `hooks` block survives a merge
-//! untouched, the document is round-tripped through [`serde_json::Value`] so no
-//! key can be dropped by not being modelled, and every write is atomic and
-//! aborts if the file changed since it was read.
-//!
-//! AYDY also takes over the `Stop` and `Notification` hooks that play a sound,
-//! because it plays the same sounds for the same events. Only entries it can
-//! positively identify are touched, and what it removes is stashed so uninstall
-//! can put it back exactly as it was.
+//! user, not to AYDY. Everything outside the `hooks` block survives untouched,
+//! the document is round-tripped through [`serde_json::Value`] so no key can be
+//! dropped by not being modelled, and every write is atomic and aborts if the
+//! file changed since it was read.
 
-pub mod install;
+pub mod legacy;
 pub mod merge;
 pub mod settings_file;
-pub mod stash;
 
 use std::fmt;
 use std::io;
@@ -138,38 +133,6 @@ pub(crate) mod test_support {
   "effortLevel": "high",
   "tui": {
     "theme": "dark"
-  },
-  "model": "opus"
-}
-"#;
-
-    /// A settings file drawn from the rule rather than from this machine: two
-    /// `Notification` groups with different matchers and the **same** command,
-    /// which is how a user writes one sound per notification kind. The two
-    /// entries are structurally identical, so anything that identifies a
-    /// removal by its hook body alone sees one where there are two.
-    pub const SETTINGS_WITH_TWIN_SOUND_HOOKS: &str = r#"{
-  "hooks": {
-    "Notification": [
-      {
-        "matcher": "permission_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "afplay /System/Library/Sounds/Hero.aiff"
-          }
-        ]
-      },
-      {
-        "matcher": "idle_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "afplay /System/Library/Sounds/Hero.aiff"
-          }
-        ]
-      }
-    ]
   },
   "model": "opus"
 }

@@ -1,7 +1,7 @@
 {
   "name": "aydy-companion",
   "displayName": "AYDY Companion",
-  "description": "Tells AYDY which Claude Code sessions belong to this VS Code window",
+  "description": "Tracks Claude Code sessions for AYDY and shows how many need you in each window's tab",
   "version": "0.1.0",
   "private": true,
   "publisher": "aydy",
@@ -9,12 +9,34 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "extensionKind": [
+    "ui"
+  ],
   "categories": [
     "Other"
   ],
   "main": "./out/extension.js",
+  "scripts": {
+    "vscode:uninstall": "node ./out/uninstall.js"
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
-  "contributes": {}
+  "contributes": {
+    "commands": [
+      {
+        "command": "aydy.showSessionCountInTabTitle",
+        "title": "Show Session Count in Tab Title",
+        "category": "AYDY"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "aydy.showSessionCountInTabTitle",
+          "when": "workbenchState == folder"
+        }
+      ]
+    }
+  }
 }

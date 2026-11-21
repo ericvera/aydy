@@ -3,7 +3,6 @@ import type { VueWrapper } from '@vue/test-utils'
 import { mount } from '@vue/test-utils'
 import { expect, it } from 'vitest'
 
-import type { HookStatus } from '../../types/HookStatus'
 import type { Settings } from '../../types/Settings'
 
 import SettingsPane from './SettingsPane.vue'
@@ -15,18 +14,8 @@ const aSettings = (overrides: Partial<Settings> = {}): Settings => ({
   ...overrides,
 })
 
-const aHookStatus = (overrides: Partial<HookStatus> = {}): HookStatus => ({
-  installed: true,
-  hookCount: 5,
-  settingsPath: '~/.claude/settings.json',
-  receivingEvents: true,
-  ...overrides,
-})
-
 interface Options {
   settings?: Settings | null
-  hookStatus?: HookStatus
-  extensionConnected?: boolean
   failure?: { reason: string } | null
 }
 
@@ -35,24 +24,8 @@ const pane = (options: Options = {}): VueWrapper =>
     props: {
       settings: options.settings === undefined ? aSettings() : options.settings,
       failure: options.failure ?? null,
-      hookStatus: options.hookStatus ?? aHookStatus(),
-      hookFailure: null,
-      hookBusy: false,
-      extensionConnected: options.extensionConnected ?? false,
     },
   })
-
-const press = async (wrapper: VueWrapper, label: string): Promise<void> => {
-  const button = wrapper
-    .findAll('button')
-    .find((candidate) => candidate.text() === label)
-
-  if (button === undefined) {
-    throw new Error(`there is no button labelled ${label}`)
-  }
-
-  await button.trigger('click')
-}
 
 const switches = (wrapper: VueWrapper): string[] =>
   wrapper
@@ -73,9 +46,7 @@ it('exposes every setting the pane is responsible for', () => {
     'Launch at login',
   ])
   expect(rendered).toContain('VS Code extension')
-  expect(rendered).toContain('Installed — 5 hooks')
-  expect(rendered).toContain('Reinstall')
-  expect(rendered).toContain('Remove hooks')
+  expect(rendered).toContain('Session tracking Installed')
 })
 
 /**
@@ -115,33 +86,22 @@ it('sends only the setting that moved', async () => {
 })
 
 /**
- * REQ-EXT-6. A companion the user never hears about does not get installed, and
- * several behaviours degrade quietly without it. The pane renders the state it
- * is handed; whether a window has registered is decided in Rust.
+ * The pane is reachable only once tracking is installed, so the row has one
+ * state to show, and the note says who records the sessions.
  */
-it('reports the companion extension as not connected until something registers', () => {
+it('reports session tracking as installed by the extension', () => {
   const rendered = renderedText(pane().element)
 
-  expect(rendered).toContain('VS Code extension Not connected')
+  expect(rendered).toContain('Session tracking Installed')
   expect(rendered).toContain(
-    'It tells AYDY which session you are looking at, so AYDY can stay quiet about that one and take you back to it. Everything else works without it.',
+    'The extension records every Claude Code session, whether or not AYDY is running. AYDY only reads what it records.',
   )
 })
 
-it('reports the companion extension as connected once it has registered', () => {
-  expect(renderedText(pane({ extensionConnected: true }).element)).toContain(
-    'VS Code extension Connected',
-  )
-})
+it('has no hooks section', () => {
+  const rendered = renderedText(pane().element).toLowerCase()
 
-it('passes the hook actions on', async () => {
-  const wrapper = pane()
-
-  await press(wrapper, 'Reinstall')
-  await press(wrapper, 'Remove hooks')
-
-  expect(wrapper.emitted('reinstall')).toHaveLength(1)
-  expect(wrapper.emitted('removeHooks')).toHaveLength(1)
+  expect(rendered).not.toContain('hook')
 })
 
 /**

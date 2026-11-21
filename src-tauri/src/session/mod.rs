@@ -6,6 +6,7 @@
 //! the injected clock, so the whole status model is exercised by unit tests.
 
 pub mod event;
+pub mod hook_payload;
 pub mod registry;
 #[allow(clippy::module_inception)]
 pub mod session;

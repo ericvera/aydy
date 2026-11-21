@@ -19,46 +19,40 @@ question.
 
 | #   | State         | Shape                          | Count            |
 | --- | ------------- | ------------------------------ | ---------------- |
-| 1   | Not receiving | ring with a slash              | none             |
-| 2   | Needs input   | disc with an exclamation mark  | unread sessions  |
-| 3   | Something new | solid disc                     | unread sessions  |
-| 4   | Working       | ring with its left half filled | working sessions |
-| 5   | All quiet     | thin ring                      | none             |
+| 1   | Needs input   | disc with an exclamation mark  | unread sessions  |
+| 2   | Something new | solid disc                     | unread sessions  |
+| 3   | Working       | ring with its left half filled | working sessions |
+| 4   | All quiet     | thin ring                      | none             |
 
-1. **Not receiving** — hooks are registered but their events are going nowhere,
-   so the list cannot be trusted. It outranks everything because every state
-   below it is a claim about sessions the app may not be seeing. A fresh install
-   with no hooks yet is **not** this state: nothing is being sent, so nothing is
-   being lost.
-2. **Needs input** — at least one **unread** session is waiting on the user.
-3. **Something new** — at least one **unread** session in any other status. This
+1. **Needs input** — at least one **unread** session is waiting on the user.
+2. **Something new** — at least one **unread** session in any other status. This
    is the state the app is named after: work finished while you were away and
    you have not looked yet. It outranks working, because working is the state
    you already expect.
-4. **Working** — something is running and nothing is waiting to be looked at.
-5. **All quiet** — nothing needs attention.
+3. **Working** — something is running and nothing is waiting to be looked at.
+4. **All quiet** — nothing needs attention.
 
 **A session that has been read never raises the icon above working**, even while
 its status is still Needs input. Reading is what makes the amber state drop;
 nothing is dismissed by hand. Mock scenario 9 is this rule in motion — the
-moment a window regains focus, its row clears and the icon falls from state 2 to
-state 3.
+moment a window regains focus, its row clears and the icon falls from state 1 to
+state 2.
 
 ### Counts
 
-States 2 and 3 count **unread** sessions — every unread session, not only the
-waiting ones, so the number matches the popover header's `· N new`. State 4
-counts **working** sessions. States 1 and 5 carry no count at all.
+States 1 and 2 count **unread** sessions — every unread session, not only the
+waiting ones, so the number matches the popover header's `· N new`. State 3
+counts **working** sessions. State 4 carries no count at all.
 
 The count is the tray item's title, drawn beside the icon in the menu bar font.
 
 ### Why shape and not colour
 
-The mock draws the five states in status colours. The shipped icons cannot:
+The mock draws the four states in status colours. The shipped icons cannot:
 macOS menu bar icons are **template images**, black plus alpha, tinted by the
 system to suit the menu bar they land in — which is what makes an icon legible
 in both a light and a dark menu bar, and in front of any wallpaper. Colour is
-therefore not available to carry meaning, and states 2, 3 and 4 have to be told
+therefore not available to carry meaning, and states 1, 2 and 3 have to be told
 apart by silhouette. The circle family of the mock is kept; the fill is what
 varies:
 
@@ -66,7 +60,6 @@ varies:
 - half-filled ring → part way through
 - solid disc → finished
 - disc with an exclamation → finished **and** blocked on you
-- ring with a slash → the app itself is broken
 
 This is also why status colour never leaks into the icon: in the popover,
 colour is reserved for the status dot (see ui-conventions.md).
@@ -109,7 +102,7 @@ reason `body` must not paint a background — it would fill the corners back in.
 The drop shadow is the window's own (`shadow: true`); macOS derives it from the
 opaque pixels, so it follows the rounded edge.
 
-Any later screen — first run, settings, reconnecting — belongs **inside** this
+Any later screen — setup, settings — belongs **inside** this
 shell. It is one window, and the frame does not change with the content.
 
 ### Opening and closing
@@ -130,11 +123,8 @@ Top to bottom, at 320px:
 1. **Header** — `px-5 pt-4 pb-3`. An uppercase `text-1 font-3 neutral-5` count
    line on the left: `No sessions`, `4 sessions`, or `6 sessions · 2 new`. The
    `· N new` half appears only when something is unread, and its number is the
-   same unread count the icon shows. While the list is stale the header says
-   **Reconnecting** instead of a count — see the stale notice below. The
-   settings control sits on the right — a gear, and the only way into settings.
-   It is on the list and nowhere else, and it survives the stale state, which is
-   a state the user may well want to open settings from.
+   same unread count the icon shows. The settings control sits on the right — a
+   gear, and the only way into settings. It is on the list and nowhere else.
 2. **Body** — the grouped session list, one line per session.
 3. **Footer** — quit, and nothing else.
 
@@ -163,10 +153,9 @@ session list and nowhere else — no other screen in the mock has a footer.
   mock scenario 1A is what it looks like.
 - **The dot owns colour**, one hue per status, `bg-status-*`. Unknown takes
   `status-idle`.
-- **The one exception to a row's dot and title** is the current-session mark:
-  when AYDY knows which session the user is in, that row says **you are here**.
-  At most one row ever carries it, which is structural — the registry holds one
-  focused window.
+- **No row says you are here.** The app no longer hears which window has
+  focus, so it cannot know which session the user is in, and no row carries
+  anything beyond its dot and title.
 - **Group headers** are `<repo> · <branch>`, or the repository alone while the
   branch is unknown, plus one **Not yet identified** group and one **Not
   jumpable** group. They do **not** indent their rows; indentation was tried
@@ -215,9 +204,9 @@ session list and nowhere else — no other screen in the mock has a footer.
 
 ### Clicking a row
 
-- Every row is interactive and every click marks its session read. Without the
-  companion extension that click is the only way to clear unread, so a row that
-  cannot be jumped to stays live even though the mock draws it inert.
+- Every row is interactive and every click marks its session read. A session no
+  VS Code window owns is cleared by that click alone, so a row that cannot be
+  jumped to stays live even though the mock draws it inert.
 - Only a jumpable row navigates, and navigating is what closes the popover. A
   click that only marks a session read leaves the popover open, since the user
   is still reading the list.
@@ -231,81 +220,43 @@ session list and nowhere else — no other screen in the mock has a footer.
 
 ### What clears an unread
 
-Two things, and nothing else — there is no dismiss control:
+A session is **unread** when its last event is a `Stop` or a `Notification` and
+that event is newer than the session's last seen time. Any later event — a new
+prompt, a fresh start — makes it read again whatever the seen time says. There
+is no dismiss control. Two things write a seen time, and nothing else:
 
-- **A click on the row**, jumpable or not.
-- **A window reporting that it has focus**, which clears every session that
-  window is running.
+- **The VS Code window that owns the session, while it has focus.** It marks
+  every one of its sessions seen when it gains focus, and again whenever one of
+  them changes while it still has it. So arriving at a window clears all of its
+  sessions, and a session that finishes in the window the user is sitting in is
+  never unread at all.
+- **A click on the row in the popover**, jumpable or not. For a session no
+  window owns, this is the only way it clears.
 
-**The second one departs from the written requirement, on the user's word at the
-acceptance gate.** As specified, focus cleared only the session owning the
-window's _active tab_, so that focusing a window holding four sessions would not
-clear three the user had not looked at. Against a real editor that rule almost
-never fires. A window reports no Claude tab in front whenever the thing in front
-is a source file, a diff, a terminal or the settings pane — which is nearly
-always, for anyone actually working — and even with the panel in front the tab is
-matched by its visible label, which fails for a session with no generated title
-yet, one whose tab still shows its first prompt, and one the user renamed by
-hand. So the user came back to a window, sat in it, and the mark stayed up. Their
-words: _when I open or interact with a window, it does not reset the notification
-that there are new things to look at._
-
-Window membership comes from the process tree instead of from a tab label, so it
-holds for every session the join placed, titled or not. The scoping the original
-rule was protecting is kept where it matters: a session belongs to exactly one
-window, so focus in one window never touches another's, and a session nothing
-placed in a window — the ordinary state with no companion extension installed —
-is reachable only by a click, exactly as before.
-
-**Only a report from the editor clears this way.** The registry re-matches every
-window's reported tab label on each scan, because titles arrive up to a scan
-after the tab that shows them; that re-match is not the user arriving anywhere.
-Sweeping there would take an unread back within a scan of raising it, and a
-session that finished behind the tab in front would never be announced at all.
-The re-match still clears the one session it newly identifies as the focused
-window's active tab, which is the case it exists for.
-
-**What did not widen, deliberately:**
-
-- **Whether an event raises an unread at all**, and with it whether a sound
-  plays. Reading is the app being told the user has arrived; staying silent is
-  the app deciding not to tell them in the first place, and the window someone is
-  typing in is exactly where a Claude tab behind the one in front goes unnoticed.
-  Widened, a session that finished in the focused window would get no sound, no
-  mark and no icon — announced nowhere, which is the opposite of what was asked
-  for. Suppression stays on the strict rule: the session owns the active tab
-  **and** that tab's window has focus.
-- **The you are here mark.** Its claim is that this is the session the user is
-  in, and at most one row may carry it. On the window rule every row in the
-  focused window would claim it, about sessions the user is not in.
-
-The asymmetry that leaves is intended: a session that finishes in a window the
-user is already sitting in does sound and does go unread, and clears on their
-next move — switching tab, or leaving the window and coming back, both of which
-the editor reports.
+The VS Code tab count — `● N folder` in each window's title — counts that
+window's unread sessions by the same rule, read from the same files, so the
+window and the popover cannot disagree about what is new.
 
 ### What a jump does, and what it says when it cannot
 
-The tab first, then the window: the extension is asked to bring the session's own
-tab forward, and only then is the window raised. The other order has the user
-watch the tab switch after the window is already in front of them.
+A click writes a request file naming the session. The one VS Code window that
+owns the session picks it up, brings the session's own tab forward and answers
+with what to raise; only then does the app raise it. The tab moves first, so
+the user never watches it switch after the window is already in front of them.
 
 **It closes the popover on the answer, not on the click.** A jump that found no
-window to raise did not navigate, and that is a click that leaves the popover
-open — so the popover is taken down once the app has said which of the two
-happened. The wait is invisible in the ordinary case, because the window coming
-forward takes focus from the popover and the popover hides on focus loss before
-the answer arrives.
+window did not navigate, and that is a click that leaves the popover open — so
+the popover is taken down once the app has said which of the two happened. The
+wait is invisible in the ordinary case, because the window coming forward takes
+focus from the popover and the popover hides on focus loss before the answer
+arrives.
 
-**Nothing is reported as a success until the window says so.** Every mechanism
-behind a jump fails silently — the editor command answers about a tab rather
-than about focus, and `code` answers as soon as it has handed the folder over —
-so the app waits for the extension's own focus report, tries once more without
-it, and then says it could not. There are two ways for a jump to be said out
-loud, and they are not the same weight:
+**Nothing is reported as a success until a window answers.** If no window picks
+the request up within a few seconds, the app stops waiting and says so. There
+are two ways for a jump to be said out loud, and they are not the same weight:
 
-- **VS Code did not come forward** — a `warning`. It may well have worked;
-  nothing confirmed it.
+- **No VS Code window took the jump.** The window that had this session may be
+  closed — a `warning`. Nothing moved, and nothing needs undoing.
 - **A new Claude tab opened** — an `error`, and the only banner in the app that
   asks the user to do something to an editor: close the tab without typing in
   it. It means a guard was wrong and a second live copy of that session may now
@@ -316,82 +267,52 @@ clicked. A jump that simply found no window says **nothing at all** — that is
 the ordinary state of a session AYDY cannot place, and drawing it as a failure
 would make an app that is working look broken.
 
-**Without the extension a click still raises a window**, because Claude Code
-writes one lock file per editor window naming the folders it has open, and that
-answers the only question raising needs: does a window have this folder open? A
-session neither the extension nor those files can place goes nowhere, silently.
-
-### Offering the companion extension
-
-A line under the list, above the footer: what the extension adds, and that no
-window is reporting yet. It is shown only while none is, it is dismissible, and
-being dismissed is remembered — a companion nobody hears about does not get
-installed, and one that asks every day is worse than that. It is a quiet line
-and never a banner: everything it adds is an improvement on something that
-already works, and status colour belongs to status.
-
-It stays off the stale list, which is the app saying it cannot see what is
-running — no moment to suggest an improvement to how well it works.
-
 ## Setup: the screen before there is a list
 
-AYDY cannot see a single session until it has written hooks into
-`~/.claude/settings.json`, so the first thing it ever shows is a request to edit
-a file it does not own. The screen appears **whenever the hooks are absent**,
-not only on the first launch: a user who removed them by hand gets it back
-rather than an empty list that would look like a bug.
+AYDY cannot see a single session until the VS Code extension has put its hook
+script in place and registered its hooks in `~/.claude/settings.json`. **The app
+installs nothing itself** — the extension writes both, and records sessions even
+while the app is closed. The screen appears **whenever tracking is not
+installed**, not only on the first launch: an uninstalled extension, or hooks
+removed by hand, put it back rather than leaving an empty list that would look
+like a bug.
 
-- **It explains, then asks.** It states how many hooks go in, which file they go
-  in, and that everything else in that file is left untouched — then asks. A
-  **Show me the change first** action renders the installer's own plan: the
-  hooks to be added with how each runs and its timeout, the entries to be
-  removed, and the `hooks` block exactly as it will be written.
-- **The hook count is the installer's**, never copy. It is counted from what
-  will actually be registered, so registering a sixth hook changes the sentence
-  by itself. Five is the number today and it is nowhere in the interface.
-- **What will be removed is named before the button, not after it.** Installing
-  takes over the `Stop` and `Notification` hooks that play a sound, and deleting
-  configuration the user wrote is the most consequential thing this app does.
-  Each entry is listed by its event and the command it runs, with the reason
-  (AYDY plays those sounds itself, so you do not hear both) and the way out (its
-  sounds can be turned off afterwards). It is a warning banner above the
-  install, never a footnote below it.
-- **A failed write leads with the reassurance.** Every failure path leaves the
-  settings file untouched — the write is atomic and aborts before it starts if
-  the file changed underneath it — so the banner opens with **Nothing in
-  ~/.claude/settings.json was modified**, then the reason, then **Try again**
-  and **Reveal file**.
-- **What failed decides what Try again does, and nothing installs from a change
-  that was never planned.** Planning is its own read and it has its own failure
-  — the app has to know the listener's port before it can plan, and a popover
-  opened while the listener is still binding gets a plan that timed out. With
-  no plan there is no hook count, no removal warning, and nothing has named the
-  entries an install would delete, so **Try again** plans again rather than
-  writing. The screen offers no action that installs until the plan exists.
-- **A settings file that cannot be read at all gets a screen of its own.** Then
-  AYDY cannot say whether its hooks are there, so neither the first-run screen
-  nor the list is honest — and a failure that nothing renders would leave an
-  empty popover that never reads the file again. It states that nothing was
-  modified, gives the reason, and offers the same **Try again** and **Reveal
-  file**.
-- **There is no way to settings, and no footer.** Installing the hooks is the
-  only thing that can be done until they exist, so the screen carries no gear
-  and no quit. Quit stays on the session list, which is the only screen in the
-  mocks that has a footer.
-- **The path is written the way the user writes it**, `~/.claude/settings.json`
-  rather than an absolute path with their name in it, and it comes from the
-  installer — so a `CLAUDE_CONFIG_DIR` pointing somewhere else is shown as it
-  is.
+It has three states, all under a header titled **Setup**:
+
+- **Never installed** (no hook script). It says **Install the AYDY extension in
+  VS Code**, explains that the extension tracks sessions even while this app is
+  closed and AYDY shows what it records, and offers **Show me how**. A note
+  under it says that an extension already installed only needs any VS Code
+  window opened.
+- **Show me how** reveals the steps inline, on the same screen: open the
+  Command Palette, run **Extensions: Install from VSIX…**, choose
+  **aydy-companion.vsix**, open any project window.
+- **Hooks missing** (script present, hook entries gone). It says **AYDY's hooks
+  are missing**, that sessions are not being recorded, and that opening any VS
+  Code window has the extension put them back. There is nothing to press.
+
+- **It clears by itself.** While tracking is not installed the app checks
+  every two seconds, and the list replaces the screen as soon as the files
+  appear. Once installed the checking stops, and it is asked again each time
+  the popover opens and each time settings opens — the popover is never torn
+  down, so an extension uninstalled later is noticed the next time anyone
+  looks.
+- **Nothing is shown until the first answer.** Guessing would flash the wrong
+  screen for a frame.
+- **There is no way to settings, and no footer.** Installing the extension is
+  the only thing that can be done until tracking exists, so the screen carries
+  no gear and no quit. Quit stays on the session list, which is the only screen
+  that has a footer.
 
 ## Settings
 
 One screen inside the popover — not a window, not a sheet. It is reached from
 the gear in the list header and left by the ✕ in its own, and those are the only
-two ways in and out. The screens that ask for the hooks carry a header of their
-own — the same shared one — but **no gear in it**, so there is nothing to reach
-settings from until the hooks exist: installing them is still the only thing
+two ways in and out. The install screen carries a header of its own — the same
+shared one — but **no gear in it**, so there is nothing to reach settings from
+until tracking is installed: installing the extension is still the only thing
 that can be done. The gear is passed into the shared header by the list, never
-built into it, or hoisting the header would carry the gear onto those screens
+built into it, or hoisting the header would carry the gear onto that screen
 with it.
 
 **It renders and sends; it does not decide.** Every command answers with the
@@ -405,76 +326,24 @@ something else has changed since.
 
 - **Sounds** — one switch per event.
 - **General** — launch at login.
-- **Companion extension** — that it exists, what it adds, and whether it is
-  connected. It is not in the mock: a companion the user never hears about does
-  not get installed, and several behaviours degrade quietly without it.
-- **Hooks** — see below.
+- **VS Code extension** — one **Session tracking** row reading **Installed**,
+  with a note that the extension records every Claude Code session whether or
+  not AYDY is running, and that AYDY only reads what it records. Settings is
+  reachable only once tracking is installed, so the row never says anything
+  else; when tracking goes missing the Setup screen replaces the list instead.
 
-**There is no listener port, and there is not going to be one.** Choosing a port
-is the decision the app exists to make for itself; mock scenario 5's caption
-still describes a field for it and is stale.
+### A departure from mock scenario 5
 
-### Hook status: two facts, never one
-
-Whether the hooks are **installed** and whether their events are **arriving**
-are stated as separate lines. Hooks registered against a port nothing is
-listening on are installed and silent — exactly the state the port-move and
-stale notices exist to explain — and a pane that reported only that its hooks
-exist would say nothing at all about it.
-
-When it is that state, a **warning banner** below the two lines says what is
-wrong and which action repairs it. It is the only state on the screen the user
-can act on, and it is the same condition the stale notice raises as a warning
-over the session list — the two are one fact and are given one weight.
-
-- **Reinstall** rewrites the entries in place, against the port the listener
-  currently holds.
-- **Remove hooks** takes AYDY's entries out and **puts back the sound hooks the
-  install replaced**. That restoration is what made removing them acceptable in
-  the first place, so it is stated on the screen rather than assumed.
-- **Removing does not quit.** The app goes back to the Setup screen, which is
-  what it shows whenever the hooks are absent, and settings closes behind it —
-  a pane managing hooks that are no longer there is not a screen to leave up.
-- Either action can fail, and every failure leaves the settings file exactly as
-  it was, so the banner leads with that and then gives the reason.
-
-### Two departures from mock scenario 5
-
-Both are the status-colour reservation in `ui-conventions.md`: colour that means
+It is the status-colour reservation in `ui-conventions.md`: colour that means
 status may only be used by status.
 
 - **A switch that is on is `brand-primary`, not the mock's green.** Green here
   is `status-done` doing duty as an accent.
-- **Remove hooks is a neutral button, not a red one.** The consequence is
-  carried by the sentence under it, which has to be read anyway — it names what
-  comes back.
 
 ## Notices
 
-Two things can be true about the app itself while the list is up, and both are
-banners across the top of the popover rather than system notifications.
-
-- **The port moved** — a `notice`, the neutral tint. The listener found its
-  remembered port taken, took another, and rewrote its own registered hooks
-  before this is ever shown. It names both ports and says the move is already
-  resolved. The port appears **nowhere else in the interface**, and nothing here
-  offers one to choose: choosing is the decision the app exists to make for
-  itself. Mock scenario 6 draws this amber and its caption calls it an error;
-  both are stale, and after a successful move nothing is wrong.
-- **The list is stale** — a `warning`. Once the hooks exist, events that go
-  nowhere mean the list cannot be trusted, so it is **replaced**, not annotated:
-  the notice plus how many sessions were last seen and how long ago. A list left
-  up would be presented as current, and an empty one would read as "nothing is
-  running". This state cannot apply before the hooks exist — nothing is being
-  sent then, so nothing is being lost, and a freshly installed app must not
-  present itself as broken.
-  - **The header goes with it.** The count in the header is the live one and
-    the notice's count is the frozen one, so a header left counting contradicts
-    the notice underneath it: session discovery reaps sessions on its own scan
-    while events cannot reach the app, which drains the live count to zero
-    during the spell and reads as **No sessions** above **Last seen 3
-    sessions**. The header says **Reconnecting** instead, which is what mock
-    scenario 6 draws.
+Notices are banners across the top of the popover rather than system
+notifications. The jump outcomes above are the ones the list shows.
 
 Banners have three variants and one tint each: `notice` (neutral, something
 that has already resolved itself), `warning` (the amber status tint, something
@@ -499,8 +368,13 @@ which still toggles it.
 
 ### Where the numbers come from
 
-Rust derives grouping, ordering, both counts and the icon state from a single
-registry snapshot, and pushes it to the popover over a `tauri::ipc::Channel` at
-most ten times a second, and only when it has changed. The interface renders
-what it is given and derives nothing about state on its own — a second
-derivation in the frontend is how an icon and a list start to disagree.
+Every number on screen comes from two sets of files under AYDY's data
+directory: the **status files** the hook script writes, one per session with its
+latest hook event, and the **seen files** the extension and a popover click
+write, one per session with when it was last looked at. Rust reads both every
+half second and derives grouping, ordering, unread, both counts and the icon
+state from a single registry snapshot, then pushes it to the popover over a
+`tauri::ipc::Channel` at most ten times a second, and only when it has changed.
+The interface renders what it is given and derives nothing about state on its
+own — a second derivation in the frontend is how an icon and a list start to
+disagree.

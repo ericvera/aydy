@@ -46,8 +46,11 @@ The bundled app lands in `src-tauri/target/release/bundle/macos/AYDY.app`.
 
 ## The VS Code companion extension
 
-`extension/` holds a small VS Code extension that tells AYDY which sessions belong to
-which window. Package and install it from the repository root:
+`extension/` holds the VS Code extension AYDY needs to work at all. It installs the hook
+script and Claude Code's hook entries that write each session's status file, so sessions
+are tracked even while the app is closed, and it keeps each window's count of sessions
+that need you in its tab title. Until it is installed the app shows only its Install the
+extension screen. Package and install it from the repository root:
 
 ```sh
 yarn package-extension
@@ -55,9 +58,10 @@ code --install-extension extension/aydy-companion-0.1.0.vsix
 ```
 
 Installing it any other way — copying the folder into `~/.vscode/extensions` — leaves VS
-Code's record of what is installed out of step with what is on disk. `extension/README.md`
-covers what the extension reports and why, and what that mismatch looks like when it
-happens.
+Code's record of what is installed out of step with what is on disk.
+[What it does](extension/README.md#what-it-does) in `extension/README.md` covers the files
+the extension writes, and [Installing it](extension/README.md#installing-it) what that
+mismatch looks like when it happens.
 
 ## Quality checks
 

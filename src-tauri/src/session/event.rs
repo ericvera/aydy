@@ -2,21 +2,10 @@
 
 use std::path::PathBuf;
 
-use crate::extension::registry::ExtensionPid;
 use crate::session::status::SessionStatus;
 
 /// A Claude Code session id.
 pub type SessionId = String;
-
-/// A VS Code window, named by the process id of the extension host running in
-/// it.
-///
-/// That process id is the window's only identifier, and it is the one name the
-/// registration, the session-to-window join and the command channel all use.
-/// Naming a window differently in any one of them would leave the three unable
-/// to talk about the same window without a conversion that can silently fail to
-/// match.
-pub type WindowId = ExtensionPid;
 
 /// The five Claude Code hook events the app registers for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,32 +139,6 @@ pub struct SessionEnrichment {
     pub jumpable: Option<bool>,
 }
 
-/// What the companion extension reports about one editor window.
-///
-/// Focus and the active tab are two separate facts. A tab active in a
-/// background window must not suppress unread, so they are never collapsed
-/// into a single flag.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FocusReport {
-    pub window_id: WindowId,
-    /// Whether this window currently has focus.
-    pub focused: bool,
-    /// The session owning this window's active tab, or `None` when no tab is
-    /// active or the active tab could not be matched to a session.
-    pub active_session: Option<SessionId>,
-}
-
-impl FocusReport {
-    /// A report for `window_id` with the given focus and active tab.
-    pub fn new(window_id: WindowId, focused: bool, active_session: Option<SessionId>) -> Self {
-        Self {
-            window_id,
-            focused,
-            active_session,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,13 +221,5 @@ mod tests {
         assert_eq!(enrichment.repo, None);
         assert_eq!(enrichment.branch, None);
         assert_eq!(enrichment.jumpable, None);
-    }
-
-    #[test]
-    fn a_focus_report_keeps_focus_and_the_active_tab_as_separate_facts() {
-        let report = FocusReport::new(65_921, false, Some("session-1".to_string()));
-
-        assert!(!report.focused);
-        assert_eq!(report.active_session, Some("session-1".to_string()));
     }
 }

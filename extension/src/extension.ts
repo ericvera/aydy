@@ -1,18 +1,35 @@
+import { realpathSync } from 'node:fs'
+import { basename } from 'node:path'
+
 import * as vscode from 'vscode'
 
-import type { WindowFacts } from './aydyClient'
-import { AydyClient, aydyPortFilePath, versionOf } from './aydyClient'
-import type { FocusState } from './focusReporter'
-import { FocusReporter } from './focusReporter'
-import type { RevealEnvironment, RevealRequest } from './revealSession'
-import { revealSession } from './revealSession'
+import { claudeSettingsPath, jumpDir } from './aydyPaths'
+import {
+  claimFailureNotice,
+  failureMessage,
+  releaseFailureNotice,
+} from './hookNotice'
+import { ensureHooks, installHookScript } from './hookInstall'
+import { JumpResponder } from './jumpRequests'
+import { offerKey, reopenAsWorkspace, shouldOffer } from './reopenOffer'
+import type { RevealEnvironment } from './revealSession'
+import { revealSession, versionOf } from './revealSession'
+import { tabTitle } from './sessionState'
+import { publishWindow, unpublishWindow } from './windowRegistry'
+import { WindowTracker } from './windowTracker'
+import {
+  isGeneratedWorkspace,
+  readWorkspaceFolder,
+  setWorkspaceTitle,
+  syncFolderSettings,
+} from './workspaceFile'
 
 /**
  * The Claude Code extension, whose version this integration is pinned against.
  *
- * It exports no API, so nothing here calls it; the version is reported to AYDY
- * so that a window running one this integration has not been checked against is
- * a fact AYDY holds rather than a mystery in a bug report.
+ * It exports no API, so nothing here calls it. Its version is read only so the
+ * reveal can refuse to drive a Claude Code version this integration has not
+ * been checked against.
  */
 const CLAUDE_CODE_EXTENSION = 'Anthropic.claude-code'
 
@@ -22,9 +39,9 @@ const CLAUDE_CODE_EXTENSION = 'Anthropic.claude-code'
  *
  * The editor prefixes the view type an extension chose, so this is tested by
  * containment rather than equality. Getting it wrong leaves every tab looking
- * like no Claude tab at all, which suppresses nothing — the recoverable
- * direction — whereas reporting any tab's label invites a source file named
- * like a session summary to clear an unread the user never saw.
+ * like no Claude tab at all, so a reveal answers `notPresent` — the safe
+ * direction — whereas matching any tab would let a source file named like a
+ * session summary be taken for a session's tab.
  */
 const CLAUDE_PANEL_VIEW_TYPE = 'claudeVSCodePanel'
 
@@ -47,15 +64,159 @@ const isClaudeTab = (tab: vscode.Tab): boolean =>
 const claudeCodeVersion = (): string | null =>
   versionOf(vscode.extensions.getExtension(CLAUDE_CODE_EXTENSION)?.packageJSON)
 
-let client: AydyClient | undefined
+let unreadCount = 0
 
-const windowFacts = (): WindowFacts => ({
-  pid: process.pid,
-  workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
-    (folder) => folder.uri.fsPath,
-  ),
-  claudeCodeVersion: claudeCodeVersion(),
-})
+export const currentUnreadCount = (): number => unreadCount
+
+const log = (error: unknown): void => {
+  console.error('AYDY:', error)
+}
+
+let workspaceWrites: Promise<unknown> = Promise.resolve()
+
+const enqueueWorkspaceWrite = (fn: () => Promise<unknown>): void => {
+  workspaceWrites = workspaceWrites.then(fn).catch(log)
+}
+
+let generated: { path: string; folder: string } | undefined
+
+const writeTitle = (): void => {
+  const target = generated
+  if (target === undefined) {
+    return
+  }
+  enqueueWorkspaceWrite(() =>
+    setWorkspaceTitle(
+      target.path,
+      tabTitle(unreadCount, basename(target.folder)),
+    ),
+  )
+}
+
+const syncSettings = (path: string): void => {
+  enqueueWorkspaceWrite(() => syncFolderSettings(path))
+}
+
+const generatedWorkspaceFile = (): string | undefined => {
+  const file = vscode.workspace.workspaceFile
+  return file?.scheme === 'file' && isGeneratedWorkspace(file.fsPath)
+    ? file.fsPath
+    : undefined
+}
+
+const keepGeneratedWorkspace = async (
+  context: vscode.ExtensionContext,
+  path: string,
+): Promise<void> => {
+  const folder = await readWorkspaceFolder(path)
+  if (folder === null) {
+    return
+  }
+  generated = { path, folder }
+  syncSettings(path)
+  writeTitle()
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(
+      vscode.Uri.file(folder),
+      '.vscode/settings.json',
+    ),
+  )
+  context.subscriptions.push(
+    watcher,
+    watcher.onDidCreate(() => {
+      syncSettings(path)
+    }),
+    watcher.onDidChange(() => {
+      syncSettings(path)
+    }),
+    watcher.onDidDelete(() => {
+      syncSettings(path)
+    }),
+  )
+}
+
+const REOPEN_MESSAGE =
+  "Show how many Claude Code sessions need you in this window's tab? AYDY reopens this window from a workspace file kept outside the repo. This restarts the window, which may end Claude Code sessions open in it."
+const NOT_NOW = 'Not now'
+const REOPEN = 'Reopen as workspace'
+const SINGLE_FOLDER_ONLY =
+  'AYDY: The session count in the tab title only applies to a window opened as a single folder.'
+
+const openWorkspace = async (folder: string): Promise<void> => {
+  await reopenAsWorkspace(folder, tabTitle(unreadCount, basename(folder)), {
+    openFolder: (path, options) =>
+      vscode.commands.executeCommand(
+        'vscode.openFolder',
+        vscode.Uri.file(path),
+        options,
+      ),
+  })
+}
+
+const workspaceFileName = (): string | undefined =>
+  vscode.workspace.workspaceFile?.toString()
+
+const offerReopen = async (
+  context: vscode.ExtensionContext,
+  folders: string[],
+): Promise<void> => {
+  const folder = folders[0]
+  if (
+    folder === undefined ||
+    !shouldOffer({
+      workspaceFile: workspaceFileName(),
+      folders,
+      offered: context.globalState.get<boolean>(offerKey(folder)) === true,
+    })
+  ) {
+    return
+  }
+  // Marked before asking, so a reload during the notice cannot show it twice.
+  await context.globalState.update(offerKey(folder), true)
+  const choice = await vscode.window.showInformationMessage(
+    REOPEN_MESSAGE,
+    NOT_NOW,
+    REOPEN,
+  )
+  if (choice === REOPEN) {
+    await openWorkspace(folder)
+  }
+}
+
+const showCountInTabTitle = async (folders: string[]): Promise<void> => {
+  const folder = folders[0]
+  if (
+    folder === undefined ||
+    !shouldOffer({
+      workspaceFile: workspaceFileName(),
+      folders,
+      offered: false,
+    })
+  ) {
+    await vscode.window.showInformationMessage(SINGLE_FOLDER_ONLY)
+    return
+  }
+  await openWorkspace(folder)
+}
+
+const localFolders = (): string[] =>
+  (vscode.workspace.workspaceFolders ?? [])
+    .filter((folder) => folder.uri.scheme === 'file')
+    .map((folder) => {
+      try {
+        return realpathSync(folder.uri.fsPath)
+      } catch {
+        return folder.uri.fsPath
+      }
+    })
+
+const publish = (folders: string[]): void => {
+  publishWindow(process.pid, folders).catch(() => undefined)
+}
+
+const unpublish = async (): Promise<void> => {
+  await unpublishWindow(process.pid).catch(() => undefined)
+}
 
 /**
  * Everything a reveal reads and does, gathered off the `vscode` API.
@@ -91,84 +252,102 @@ const revealEnvironment: RevealEnvironment = {
     }),
 }
 
-/**
- * The label on this window's active Claude Code tab, or `null` when the tab in
- * front is not one.
- *
- * A session opened in the sidebar is a view rather than a tab and never appears
- * among the tab groups at all, so having no Claude tab is an ordinary state and
- * not a failure to read one.
- */
-const activeTabLabel = (): string | null => {
-  const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+const OPEN_FILE = 'Open file'
+const TRY_AGAIN = 'Try again'
 
-  return tab !== undefined && isClaudeTab(tab) ? tab.label : null
+const installTracking = async (
+  context: vscode.ExtensionContext,
+): Promise<void> => {
+  try {
+    await installHookScript(context.extensionPath)
+    const result = await ensureHooks()
+    if (result.ok) {
+      await releaseFailureNotice()
+      return
+    }
+    if (!(await claimFailureNotice())) {
+      return
+    }
+    const settingsPath = claudeSettingsPath()
+    const choice = await vscode.window.showErrorMessage(
+      failureMessage(result.reason, settingsPath),
+      OPEN_FILE,
+      TRY_AGAIN,
+    )
+    if (choice === OPEN_FILE) {
+      await vscode.window.showTextDocument(vscode.Uri.file(settingsPath))
+    } else if (choice === TRY_AGAIN) {
+      await releaseFailureNotice()
+      await installTracking(context)
+    }
+  } catch {
+    // Tracking is best effort; activation must go on without it.
+  }
 }
 
-const focusState = (): FocusState => ({
-  focused: vscode.window.state.focused,
-  activeTabLabel: activeTabLabel(),
-})
-
 /**
- * Starts reporting this window to AYDY.
- *
- * There is nothing to configure and nothing to ask: AYDY publishes its port and
- * this window finds it. AYDY not being installed is the ordinary case on most
- * machines, and leaves this doing nothing visible at all.
+ * Installs tracking, publishes this window's folders, keeps the tab count and
+ * title, and answers jump requests, all through files under AYDY's data
+ * directory. It needs no running app and asks nothing.
  */
 export const activate = (context: vscode.ExtensionContext): void => {
-  const started = new AydyClient({
-    facts: windowFacts(),
-    portFilePath: aydyPortFilePath(),
-    // An AYDY that has just registered this window knows nothing else about
-    // it, and where the user is is only ever reported on change. A window
-    // sitting untouched while AYDY restarts would otherwise stay unaccounted
-    // for until the user moved something.
-    onRegistered: () => {
-      focus.resend()
+  void installTracking(context)
+
+  let folders = localFolders()
+  publish(folders)
+  const tracker = new WindowTracker({
+    pid: process.pid,
+    folders: () => folders,
+    focused: () => vscode.window.state.focused,
+    onCount: (count) => {
+      unreadCount = count
+      writeTitle()
     },
-    reveal: async (request: RevealRequest) =>
-      revealSession(request, revealEnvironment),
   })
-  const focus = new FocusReporter({
-    send: (state) => started.reportFocus(state.focused, state.activeTabLabel),
+
+  const jumps = new JumpResponder({
+    dir: jumpDir(),
+    pid: process.pid,
+    folders: () => folders,
+    open: () => {
+      const file = vscode.workspace.workspaceFile
+      return file?.scheme === 'file' ? file.fsPath : null
+    },
+    reveal: async (request) => revealSession(request, revealEnvironment),
   })
-  const reportFocus = (): void => {
-    focus.report(focusState())
+
+  const generatedPath = generatedWorkspaceFile()
+  if (generatedPath === undefined) {
+    offerReopen(context, folders).catch(log)
+  } else {
+    keepGeneratedWorkspace(context, generatedPath).catch(log)
   }
 
-  client = started
   context.subscriptions.push(
-    {
-      dispose: () => {
-        focus.dispose()
-        void started.close()
-      },
-    },
-    // Folders come and go from a multi-root workspace without the extension
-    // host restarting, so what was open at activation is only right until the
-    // user adds or removes one — and AYDY picks the window to send a session
-    // to from exactly this list.
+    { dispose: () => void unpublish() },
+    tracker,
+    jumps,
+    vscode.commands.registerCommand('aydy.showSessionCountInTabTitle', () =>
+      showCountInTabTitle(folders).catch(log),
+    ),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      void started.update(windowFacts())
+      folders = localFolders()
+      publish(folders)
+      tracker.poke()
     }),
-    // Focus is half of what says whether the user is watching a session, and
-    // losing it matters as much as gaining it: a window AYDY still believes is
-    // in front goes on silencing its own notifications.
-    vscode.window.onDidChangeWindowState(reportFocus),
-    // The tab in front is the other half. It moves when a tab is opened,
-    // closed or activated, and when a different group becomes the active one.
-    vscode.window.tabGroups.onDidChangeTabs(reportFocus),
-    vscode.window.tabGroups.onDidChangeTabGroups(reportFocus),
+    vscode.window.onDidChangeWindowState(() => {
+      tracker.poke()
+    }),
   )
 
-  void started.start()
-  reportFocus()
+  void tracker.start()
+  void jumps.start()
 }
 
-/** Tells AYDY this window has gone, rather than leaving it to time out. */
+/**
+ * Withdraws this window's published folder file, so other windows stop counting
+ * it as an owner.
+ */
 export const deactivate = async (): Promise<void> => {
-  await client?.close()
-  client = undefined
+  await unpublish()
 }

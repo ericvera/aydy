@@ -10,8 +10,6 @@
  * There is no listener port here and there is not going to be one: choosing a
  * port is the decision the app exists to make for itself.
  */
-import type { HookFailure } from '../../types/HookFailure'
-import type { HookStatus } from '../../types/HookStatus'
 import type { Settings } from '../../types/Settings'
 import type { SettingsChange } from '../../types/SettingsChange'
 import type { SettingsFailure } from '../../types/SettingsFailure'
@@ -22,16 +20,10 @@ import Toggle from '../atoms/Toggle.vue'
 import Banner from '../molecules/Banner.vue'
 import ScreenHeader from '../molecules/ScreenHeader.vue'
 import SettingRow from '../molecules/SettingRow.vue'
-import HookSettings from './HookSettings.vue'
 
 interface Props {
   settings: Settings | null
   failure: SettingsFailure | null
-  hookStatus: HookStatus
-  hookFailure: HookFailure | null
-  hookBusy: boolean
-  /** Whether any VS Code window's companion extension has registered. */
-  extensionConnected: boolean
 }
 
 const props = defineProps<Props>()
@@ -39,8 +31,6 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
   update: [SettingsChange]
-  reinstall: []
-  removeHooks: []
 }>()
 </script>
 
@@ -104,36 +94,23 @@ const emit = defineEmits<{
 
         <section class="group-divider py-4">
           <div class="px-5">
-            <SectionLabel>Companion extension</SectionLabel>
+            <SectionLabel>VS Code extension</SectionLabel>
 
             <div class="pt-2">
-              <SettingRow label="VS Code extension">
+              <SettingRow label="Session tracking">
                 <template #control>
-                  <span class="shrink-0 text-2 text-neutral-6">
-                    {{
-                      props.extensionConnected ? 'Connected' : 'Not connected'
-                    }}
-                  </span>
+                  <span class="shrink-0 text-2 text-neutral-6">Installed</span>
                 </template>
                 <template #note>
                   <FieldNote>
-                    It tells AYDY which session you are looking at, so AYDY can
-                    stay quiet about that one and take you back to it.
-                    Everything else works without it.
+                    The extension records every Claude Code session, whether or
+                    not AYDY is running. AYDY only reads what it records.
                   </FieldNote>
                 </template>
               </SettingRow>
             </div>
           </div>
         </section>
-
-        <HookSettings
-          :status="props.hookStatus"
-          :failure="props.hookFailure"
-          :busy="props.hookBusy"
-          @reinstall="emit('reinstall')"
-          @remove="emit('removeHooks')"
-        />
       </template>
     </div>
   </div>

@@ -91,14 +91,10 @@ it('draws the whole list', () => {
   expect(list([okvenMain, notJumpable]).html()).toMatchInlineSnapshot(`
     "<div class="group/list">
       <section class="group-divider">
-        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">okven · main</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-unread min-w-0 flex-1">Review and prioritize customer requests</span>
-          <!--v-if--></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span>
-        </button>
+        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">okven · main</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-unread min-w-0 flex-1">Review and prioritize customer requests</span></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span></button>
       </section>
       <section class="group-divider">
-        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">Not jumpable</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-default"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-working"></span><span class="truncate text-2 title-read min-w-0 flex-1">Review yarn.lock dependencies</span>
-          <!--v-if--></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Working</span><span>Working time 0s</span><span>Longest turn 0s</span></span>
-        </button>
+        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">Not jumpable</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-default"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-working"></span><span class="truncate text-2 title-read min-w-0 flex-1">Review yarn.lock dependencies</span></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Working</span><span>Working time 0s</span><span>Longest turn 0s</span></span></button>
       </section>
     </div>"
   `)
@@ -198,25 +194,6 @@ it('passes a click on a row that cannot be jumped to through as read alone', asy
 
   expect(wrapper.emitted('read')).toStrictEqual([['d']])
   expect(wrapper.emitted('navigate')).toBeUndefined()
-})
-
-/**
- * At most one row says the user is in it. The registry guarantees that by
- * holding one focused window, and the list must not spread the mark across the
- * rows it renders.
- */
-it('marks at most one row as the session the user is in', () => {
-  const current = aSession({
-    id: 'e',
-    label: 'The one you are in',
-    isCurrent: true,
-  })
-  const rendered = list([
-    okvenMain,
-    { ...okvenAttribution, sessions: [...okvenAttribution.sessions, current] },
-  ]).text()
-
-  expect(rendered.match(/you are here/g)).toStrictEqual(['you are here'])
 })
 
 it('renders nothing at all for a snapshot with no groups', () => {

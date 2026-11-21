@@ -11,7 +11,7 @@
 //! cannot disagree about what just happened.
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -19,14 +19,12 @@ use tauri::{AppHandle, State};
 use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
 
-use crate::extension::registry::ExtensionRegistry;
-use crate::listener::port::{PortMove, PortState};
-use crate::listener::server::{lock_recovering, ListenerHealth};
 use crate::notify::sound::SoundNotifier;
 use crate::session::registry::{
     RegistrySnapshot, SessionGroup, SessionGroupKind, SessionRegistry, SessionSnapshot,
 };
 use crate::session::status::SessionStatus;
+use crate::sync::lock_recovering;
 use crate::tray;
 use crate::tray::icon::{indication, IconIndication};
 
@@ -92,7 +90,6 @@ pub struct SessionPayload {
     pub status: StatusPayload,
     pub unread: bool,
     pub jumpable: bool,
-    pub is_current: bool,
     pub working_time_ms: u64,
     pub longest_turn_ms: u64,
     pub notification_message: Option<String>,
@@ -108,7 +105,6 @@ impl From<&SessionSnapshot> for SessionPayload {
             status: session.status.into(),
             unread: session.unread,
             jumpable: session.jumpable,
-            is_current: session.is_current,
             working_time_ms: milliseconds(session.working_time),
             longest_turn_ms: milliseconds(session.longest_turn),
             notification_message: session.notification_message.clone(),
@@ -137,98 +133,13 @@ impl From<&SessionGroup> for GroupPayload {
     }
 }
 
-/// A move the listener already made for itself.
-///
-/// The port is diagnostic and appears nowhere else in the interface; the user
-/// is never asked to choose one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PortMovePayload {
-    pub from: u16,
-    pub to: u16,
-}
-
-impl From<PortMove> for PortMovePayload {
-    fn from(moved: PortMove) -> Self {
-        Self {
-            from: moved.from,
-            to: moved.to,
-        }
-    }
-}
-
-/// What the list was when the app stopped being able to receive events.
-///
-/// The age is whole seconds rather than the observation's own resolution, so a
-/// stale list costs one message a second rather than ten.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StalePayload {
-    pub session_count: usize,
-    pub last_seen_ago_ms: u64,
-}
-
-/// When the app stopped being able to receive events, and what it could see at
-/// the time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Staleness {
-    session_count: usize,
-    since: Instant,
-}
-
-impl Staleness {
-    /// The staleness after an observation.
-    ///
-    /// The count and the moment are taken once, when the app stops being able
-    /// to receive events, because that is what "last seen" means — a count
-    /// re-read afterwards is a claim about a list the app has just said it
-    /// cannot trust. Recovery clears it, so the next spell is measured from its
-    /// own start.
-    pub fn observe(
-        current: Option<Self>,
-        cannot_receive_events: bool,
-        session_count: usize,
-        now: Instant,
-    ) -> Option<Self> {
-        if !cannot_receive_events {
-            return None;
-        }
-
-        Some(current.unwrap_or(Self {
-            session_count,
-            since: now,
-        }))
-    }
-
-    fn payload(self, now: Instant) -> StalePayload {
-        StalePayload {
-            session_count: self.session_count,
-            last_seen_ago_ms: now.duration_since(self.since).as_secs() * 1_000,
-        }
-    }
-}
-
-/// The whole list, grouped, ordered and counted by the registry, with what the
-/// popover needs to know about the app's own health.
+/// The whole list, grouped, ordered and counted by the registry.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotPayload {
     pub groups: Vec<GroupPayload>,
     pub session_count: usize,
     pub unread_count: usize,
-    /// The port move notice, once the listener has made one.
-    pub port_move: Option<PortMovePayload>,
-    /// Set only while the app cannot receive events, which cannot happen before
-    /// its hooks exist.
-    pub stale: Option<StalePayload>,
-    /// Whether any VS Code window's companion extension is registered.
-    ///
-    /// It rides on the snapshot rather than being asked for, because the one
-    /// thing that reads it is a prompt offering the extension to a user who has
-    /// not got it: windows register seconds after the editor starts and stop
-    /// registering when it closes, and a prompt that asked once at startup
-    /// would offer the extension to people who already have it.
-    pub extension_connected: bool,
 }
 
 impl From<&RegistrySnapshot> for SnapshotPayload {
@@ -237,64 +148,30 @@ impl From<&RegistrySnapshot> for SnapshotPayload {
             groups: snapshot.groups.iter().map(GroupPayload::from).collect(),
             session_count: snapshot.session_count,
             unread_count: snapshot.unread_count,
-            port_move: None,
-            stale: None,
-            extension_connected: false,
         }
     }
 }
 
-/// The payload for one observation.
-pub fn payload(
-    snapshot: &RegistrySnapshot,
-    moved: Option<PortMove>,
-    stale: Option<Staleness>,
-    now: Instant,
-) -> SnapshotPayload {
-    SnapshotPayload {
-        port_move: moved.map(PortMovePayload::from),
-        stale: stale.map(|stale| stale.payload(now)),
-        ..SnapshotPayload::from(snapshot)
-    }
-}
-
 /// Everything one observation of the registry decides: what the popover is
-/// sent, what the menu bar icon shows, and the staleness the next observation
-/// measures against.
+/// sent and what the menu bar icon shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Observation {
     payload: SnapshotPayload,
     indication: IconIndication,
-    stale: Option<Staleness>,
 }
 
 /// One observation, decided without a running app.
 ///
 /// The loop below needs an `AppHandle` and cannot be driven from a test, so
-/// everything it decides lives here instead — including the two lines that
-/// carry the port move and the stale list into the payload, and the one that
-/// hands the snapshot to the sound notifier. Each of those is a line whose
-/// absence would leave every test green and the user with nothing.
-fn observe(
-    snapshot: &RegistrySnapshot,
-    cannot_receive_events: bool,
-    extension_connected: bool,
-    moved: Option<PortMove>,
-    stale: Option<Staleness>,
-    now: Instant,
-    sounds: &SoundNotifier,
-) -> Observation {
-    let stale = Staleness::observe(stale, cannot_receive_events, snapshot.session_count, now);
-
+/// everything it decides lives here instead — including the line that hands
+/// the snapshot to the sound notifier, whose absence would leave every test
+/// green and the user with nothing.
+fn observe(snapshot: &RegistrySnapshot, sounds: &SoundNotifier) -> Observation {
     sounds.observe(snapshot);
 
     Observation {
-        payload: SnapshotPayload {
-            extension_connected,
-            ..payload(snapshot, moved, stale, now)
-        },
-        indication: indication(snapshot, cannot_receive_events),
-        stale,
+        payload: SnapshotPayload::from(snapshot),
+        indication: indication(snapshot),
     }
 }
 
@@ -378,13 +255,9 @@ pub fn subscribe_sessions(
 
 /// Observes the registry on a fixed cadence, updates the menu bar icon, plays
 /// the sounds a transition earns, and pushes the snapshot to the popover when it has changed.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
     app: AppHandle,
     registry: Arc<Mutex<SessionRegistry>>,
-    health: Arc<ListenerHealth>,
-    ports: Arc<PortState>,
-    windows: Arc<ExtensionRegistry>,
     subscription: Arc<SessionSubscription>,
     sounds: Arc<SoundNotifier>,
     shutdown: oneshot::Receiver<()>,
@@ -393,9 +266,6 @@ pub async fn run(
         PUBLISH_INTERVAL,
         app,
         registry,
-        health,
-        ports,
-        windows,
         subscription,
         sounds,
         shutdown,
@@ -404,14 +274,10 @@ pub async fn run(
 }
 
 /// The loop behind [`run`], with the period as a parameter.
-#[allow(clippy::too_many_arguments)]
 async fn run_every(
     period: Duration,
     app: AppHandle,
     registry: Arc<Mutex<SessionRegistry>>,
-    health: Arc<ListenerHealth>,
-    ports: Arc<PortState>,
-    windows: Arc<ExtensionRegistry>,
     subscription: Arc<SessionSubscription>,
     sounds: Arc<SoundNotifier>,
     mut shutdown: oneshot::Receiver<()>,
@@ -419,45 +285,24 @@ async fn run_every(
     let mut observations = tokio::time::interval(period);
     observations.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut shown: Option<IconIndication> = None;
-    let mut stale: Option<Staleness> = None;
 
     loop {
         // The registry is behind a blocking mutex, and waiting on one from an
         // async worker starves the runtime's timers and sockets.
         let observing = tokio::task::spawn_blocking({
             let registry = Arc::clone(&registry);
-            let health = Arc::clone(&health);
-            let windows = Arc::clone(&windows);
 
-            move || {
-                let snapshot = lock_recovering(&registry).snapshot();
-                let cannot_receive_events = health.cannot_receive_events();
-                // Read here with the rest: it takes a lock of its own, and
-                // every other lock this loop needs is taken on this thread.
-                let extension_connected = windows.connected();
-
-                (snapshot, cannot_receive_events, extension_connected)
-            }
+            move || lock_recovering(&registry).snapshot()
         });
 
         match observing.await {
-            Ok((snapshot, cannot_receive_events, extension_connected)) => {
-                let observed = observe(
-                    &snapshot,
-                    cannot_receive_events,
-                    extension_connected,
-                    ports.moved(),
-                    stale,
-                    Instant::now(),
-                    &sounds,
-                );
+            Ok(snapshot) => {
+                let observed = observe(&snapshot, &sounds);
 
                 if shown != Some(observed.indication) {
                     tray::update(&app, observed.indication);
                     shown = Some(observed.indication);
                 }
-
-                stale = observed.stale;
 
                 subscription.publish(&observed.payload);
             }
@@ -562,7 +407,6 @@ mod tests {
                 status,
                 unread: index < unread,
                 jumpable: true,
-                is_current: false,
                 working_time: Duration::from_secs(90),
                 longest_turn: Duration::from_millis(1_500),
                 notification_message: None,
@@ -581,262 +425,25 @@ mod tests {
         }
     }
 
-    /// The move has already been made and the hooks already rewritten, so this
-    /// is a notice; nothing about it asks the user to choose a port.
-    #[test]
-    fn a_port_move_crosses_naming_the_port_it_left_and_the_one_it_took() {
-        let moved = PortMove {
-            from: 47_823,
-            to: 47_824,
-        };
-
-        let json =
-            serde_json::to_value(payload(&snapshot(0, 0), Some(moved), None, Instant::now()))
-                .expect("the payload to serialize");
-
-        assert_eq!(json["portMove"]["from"], 47_823);
-        assert_eq!(json["portMove"]["to"], 47_824);
-        assert_eq!(json["stale"], serde_json::Value::Null);
-    }
-
-    #[test]
-    fn a_listener_that_never_moved_sends_no_notice() {
-        let payload = payload(&snapshot(0, 0), None, None, Instant::now());
-
-        assert_eq!(payload.port_move, None);
-    }
-
-    /// With no hooks registered nothing is being sent, so nothing is being
-    /// lost, and a freshly installed app must not present itself as broken.
-    /// `ListenerHealth` is what decides that, and it answers false.
-    #[test]
-    fn an_app_that_can_receive_events_is_never_stale() {
-        assert_eq!(Staleness::observe(None, false, 3, Instant::now()), None);
-    }
-
-    #[test]
-    fn an_app_that_cannot_receive_events_records_what_it_last_saw() {
-        let now = Instant::now();
-
-        let stale = Staleness::observe(None, true, 3, now).expect("a stale list");
-
-        assert_eq!(
-            stale.payload(now + Duration::from_secs(360)),
-            StalePayload {
-                session_count: 3,
-                last_seen_ago_ms: 360_000,
-            }
-        );
-    }
-
-    /// "Last seen" is what the app could see when it stopped hearing from
-    /// anything. Re-reading the count while stale would make it a claim about a
-    /// list the app has just said it cannot trust, and would restart the clock
-    /// on every observation.
-    #[test]
-    fn the_count_and_the_moment_are_taken_once_and_then_left_alone() {
-        let started = Instant::now();
-        let stale = Staleness::observe(None, true, 3, started);
-
-        let later = Staleness::observe(stale, true, 0, started + Duration::from_secs(60))
-            .expect("a stale list");
-
-        assert_eq!(
-            later.payload(started + Duration::from_secs(60)),
-            StalePayload {
-                session_count: 3,
-                last_seen_ago_ms: 60_000,
-            }
-        );
-    }
-
-    #[test]
-    fn recovering_ends_the_spell_and_the_next_one_is_measured_from_its_own_start() {
-        let started = Instant::now();
-        let stale = Staleness::observe(None, true, 3, started);
-        let recovered = Staleness::observe(stale, false, 3, started + Duration::from_secs(60));
-
-        let again = Staleness::observe(recovered, true, 5, started + Duration::from_secs(120))
-            .expect("a stale list");
-
-        assert_eq!(
-            again.payload(started + Duration::from_secs(150)),
-            StalePayload {
-                session_count: 5,
-                last_seen_ago_ms: 30_000,
-            }
-        );
-    }
-
-    /// The age is what changes while nothing else does, so its resolution is
-    /// what decides how often a stale list costs a message. A tenth of a second
-    /// would defeat the dedupe entirely.
-    #[test]
-    fn the_age_of_a_stale_list_changes_no_more_than_once_a_second() {
-        let started = Instant::now();
-        let stale = Staleness::observe(None, true, 3, started).expect("a stale list");
-
-        assert_eq!(
-            stale.payload(started + Duration::from_millis(1_100)),
-            stale.payload(started + Duration::from_millis(1_900))
-        );
-        assert_ne!(
-            stale.payload(started + Duration::from_millis(1_900)),
-            stale.payload(started + Duration::from_millis(2_000))
-        );
-    }
-
-    #[test]
-    fn a_stale_list_crosses_with_its_count_and_its_age() {
-        let started = Instant::now();
-        let stale = Staleness::observe(None, true, 3, started);
-
-        let json = serde_json::to_value(payload(
-            &snapshot(3, 0),
-            None,
-            stale,
-            started + Duration::from_secs(360),
-        ))
-        .expect("the payload to serialize");
-
-        assert_eq!(json["stale"]["sessionCount"], 3);
-        assert_eq!(json["stale"]["lastSeenAgoMs"], 360_000);
-    }
-
-    /// Both notices reach the popover through one line of the publishing loop
-    /// each, and the loop needs a running app. This is that wiring: a move the
-    /// listener already made and a spell it cannot receive events in are both
-    /// carried into the payload, and the icon is derived from the same
-    /// observation.
-    #[test]
-    fn an_observation_carries_the_port_move_and_the_stale_list_to_the_popover() {
-        let now = Instant::now();
-        let moved = PortMove {
-            from: 47_823,
-            to: 47_824,
-        };
-
-        let observed = observe(
-            &snapshot(3, 0),
-            true,
-            false,
-            Some(moved),
-            None,
-            now,
-            &sounds().0,
-        );
-
-        assert_eq!(
-            observed.payload.port_move,
-            Some(PortMovePayload {
-                from: 47_823,
-                to: 47_824,
-            })
-        );
-        assert_eq!(
-            observed.payload.stale,
-            Some(StalePayload {
-                session_count: 3,
-                last_seen_ago_ms: 0,
-            })
-        );
-        assert_eq!(observed.indication, indication(&snapshot(3, 0), true));
-    }
-
-    /// The prompt offering the companion extension reads this, and a window
-    /// registers seconds after the editor starts. Asking once when the popover
-    /// was built would offer the extension to people who already have it.
-    #[test]
-    fn an_observation_carries_whether_a_window_has_registered() {
-        let connected = observe(
-            &snapshot(1, 0),
-            false,
-            true,
-            None,
-            None,
-            Instant::now(),
-            &sounds().0,
-        );
-        let alone = observe(
-            &snapshot(1, 0),
-            false,
-            false,
-            None,
-            None,
-            Instant::now(),
-            &sounds().0,
-        );
-
-        assert!(connected.payload.extension_connected);
-        assert!(!alone.payload.extension_connected);
-    }
-
-    #[test]
-    fn an_observation_of_an_app_that_never_moved_and_can_hear_carries_neither_notice() {
-        let observed = observe(
-            &snapshot(2, 1),
-            false,
-            false,
-            None,
-            None,
-            Instant::now(),
-            &sounds().0,
-        );
-
-        assert_eq!(observed.payload.port_move, None);
-        assert_eq!(observed.payload.stale, None);
-        assert_eq!(observed.stale, None);
-        assert_eq!(observed.payload.session_count, 2);
-        assert_eq!(observed.indication, indication(&snapshot(2, 1), false));
-    }
-
     /// The sounds reach the user through one line of the publishing loop, and
     /// the loop needs a running app. This is that wiring: the same observation
     /// that fills the payload and the icon is the one the notifier is handed.
     #[test]
     fn an_observation_hands_the_snapshot_to_the_sound_notifier() {
         let (notifier, player) = sounds();
-        let now = Instant::now();
 
-        observe(&snapshot(1, 0), false, false, None, None, now, &notifier);
-        observe(
-            &snapshot_of(1, 1, SessionStatus::Done),
-            false,
-            false,
-            None,
-            None,
-            now,
-            &notifier,
-        );
+        observe(&snapshot(1, 0), &notifier);
+        observe(&snapshot_of(1, 1, SessionStatus::Done), &notifier);
 
         assert_eq!(player.asked(), vec![Sound::Finished]);
     }
 
-    /// The spell one observation records is the one the next observation ages,
-    /// so what the loop carries forward has to be what it was handed back.
     #[test]
-    fn the_staleness_an_observation_records_is_the_one_the_next_observation_ages() {
-        let started = Instant::now();
-        let notifier = sounds().0;
-        let first = observe(&snapshot(3, 0), true, false, None, None, started, &notifier);
+    fn an_observation_sends_the_snapshot_and_derives_the_icon_from_it() {
+        let observed = observe(&snapshot(2, 1), &sounds().0);
 
-        let later = observe(
-            &snapshot(0, 0),
-            true,
-            false,
-            None,
-            first.stale,
-            started + Duration::from_secs(60),
-            &notifier,
-        );
-
-        assert_eq!(
-            later.payload.stale,
-            Some(StalePayload {
-                session_count: 3,
-                last_seen_ago_ms: 60_000,
-            })
-        );
+        assert_eq!(observed.payload, SnapshotPayload::from(&snapshot(2, 1)));
+        assert_eq!(observed.indication, indication(&snapshot(2, 1)));
     }
 
     #[test]
@@ -852,9 +459,13 @@ mod tests {
         assert_eq!(session["status"], "working");
         assert_eq!(session["workingTimeMs"], 90_000);
         assert_eq!(session["longestTurnMs"], 1_500);
-        assert_eq!(session["isCurrent"], false);
         assert_eq!(session["notificationMessage"], serde_json::Value::Null);
         assert_eq!(json["groups"][0]["kind"], "project");
+        assert!(session.get("isCurrent").is_none());
+
+        for retired in ["portMove", "stale", "extensionConnected"] {
+            assert!(json.get(retired).is_none(), "{retired} is still sent");
+        }
     }
 
     /// Every field of a row, with a value of its own so a pair of them swapped
@@ -871,7 +482,6 @@ mod tests {
             status: SessionStatus::NeedsInput,
             unread: true,
             jumpable: true,
-            is_current: true,
             working_time: Duration::from_secs(90),
             longest_turn: Duration::from_millis(1_500),
             notification_message: Some("Claude needs your permission".to_string()),
@@ -886,7 +496,6 @@ mod tests {
         assert_eq!(payload.status, StatusPayload::NeedsInput);
         assert!(payload.unread);
         assert!(payload.jumpable);
-        assert!(payload.is_current);
         assert_eq!(payload.working_time_ms, 90_000);
         assert_eq!(payload.longest_turn_ms, 1_500);
         assert_eq!(
@@ -907,7 +516,6 @@ mod tests {
             status: SessionStatus::Done,
             unread: false,
             jumpable: false,
-            is_current: false,
             working_time: Duration::ZERO,
             longest_turn: Duration::ZERO,
             notification_message: None,
@@ -922,7 +530,6 @@ mod tests {
         assert_eq!(payload.status, StatusPayload::Done);
         assert!(!payload.unread);
         assert!(!payload.jumpable);
-        assert!(!payload.is_current);
         assert_eq!(payload.working_time_ms, 0);
         assert_eq!(payload.longest_turn_ms, 0);
         assert_eq!(payload.notification_message, None);

@@ -12,7 +12,6 @@ export const aSession = (overrides: Partial<Session> = {}): Session => ({
   status: 'done',
   unread: false,
   jumpable: true,
-  isCurrent: false,
   workingTimeMs: 0,
   longestTurnMs: 0,
   notificationMessage: null,
