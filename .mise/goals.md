@@ -107,3 +107,25 @@ applies before implementing.
 2. Switch the app to read the files.
 3. Remove the listener, port file, registry, process-tree matching and hook
    installer from the app.
+
+## Investigation
+
+1. Extension entry point is extension/src/extension.ts:120 (`activate`). Folders come from `workspaceFolders` at extension.ts:54. Focus and the active Claude tab are read at extension.ts:102-111 and fed into FocusReporter (extension/src/focusReporter.ts:41, 150 ms debounce at :27). New file and tab-count logic should follow this split: logic in a pure module with colocated `*.test.ts` (as in revealSession.ts / focusReporter.ts), wiring stays in extension.ts.
+2. Packaging: extension/.vscodeignore:4 excludes `src/**`, so a hook script kept under src/ will not ship in the VSIX. extension/package.json has `contributes: {}` and `onStartupFinished` only. There are no extension scripts; the root package.json `build-extension`, `build-tsc` and `test` cover extension/ (vitest include at vitest.config.ts:19).
+3. Pinned API is `@types/vscode` 1.90.0 (root package.json devDeps; extension/package.json `engines` ^1.90.0). Nothing in extension/src touches `window.title`, `workspaceFile` or `.code-workspace` yet, so the "no title API" check is still open.
+4. Conflict risk: the app's installer treats any command hook whose text contains `X-Aydy-Hook` as its own and deletes it on reinstall or uninstall (src-tauri/src/hooks/merge.rs:468-482, :171). The new script entries must not contain that marker. It also takes over bare `afplay` commands (merge.rs:486-514).
+5. Settings-write pattern to mirror in TS: round-trip the whole JSON, write atomically, abort if the file changed on disk (src-tauri/src/hooks/settings_file.rs:186-205, atomic write at src-tauri/src/atomic_file.rs:20). Honor `CLAUDE_CONFIG_DIR` (settings_file.rs:22, :229-239). extension/src has no equivalent today.
+6. Hook payload fields the code already relies on: `session_id`, `hook_event_name`, `cwd`, `transcript_path`, `message`, `notification_type`, with fallback from message to type (src-tauri/src/listener/routes.rs:43-80). SessionEnd deletes the session (src-tauri/src/session/registry.rs:195-199).
+7. Liveness: pids come from `~/.claude/sessions/<pid>.json` checked against the process table (src-tauri/src/discovery/session_files.rs:1-35). Hook payloads carry no pid, so status files need another source for liveness.
+8. Current unread rule in code: Stop/Notification mark a session unread unless it is the focused window's active tab (registry.rs:201-218, is_watched at :675). A focused window clears all of its sessions (registry.rs:392-394, read_window at :409), which already matches "arriving at the window clears it".
+9. Existing data path: app data dir `~/Library/Application Support/app.aydy` (extension/src/aydyClient.ts:12, :100-101; src-tauri/tauri.conf.json:5).
+10. Jump today goes app -> extension over the loopback channel (aydyClient.ts plus src-tauri/src/extension/command.rs), executed by revealSession (extension.ts:67-92, :131).
+11. Hard to undo: writes to the user's `~/.claude/settings.json`, raced by every window. Reopening a folder window as a generated `.code-workspace` (e.g. `vscode.openFolder`) restarts that window's extension host, which likely kills running Claude Code sessions in it — unverified. Uninstall cleanup of hook entries is a one-way edit to user config.
+12. Stage 1 leaves the app alone: its HTTP entries in HTTP_EVENTS (merge.rs:34) and SessionStart curl (merge.rs:101) stay. Stages 2-3 remove src-tauri/src/listener/, src-tauri/src/port_file.rs, src-tauri/src/extension/registry.rs, src-tauri/src/discovery/process_tree.rs, src-tauri/src/hooks/install.rs, and UI in src/components/organisms/HookSettings.vue and src/components/organisms/ExtensionPrompt.vue.
+13. Nothing in the code contradicts the brief.
+
+## Open questions
+
+1. Unread rule for the tab count: current per-tab rule, or the simpler window-focus rule?
+2. Reopening a plain-folder window from a generated workspace file restarts its extension host and may kill running Claude sessions there. When may the extension do it?
+3. Scope of this run: all three stages, or stage 1 only?
