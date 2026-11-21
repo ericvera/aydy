@@ -12,8 +12,8 @@ const props = defineProps<Props>()
 
 const emit = defineEmits<{ read: [id: string]; navigate: [id: string] }>()
 
-// Every row clears unread, jumpable or not: without the companion extension a
-// click in the popover is the only way to clear it. Only a jumpable row asks
+// Every row clears unread, jumpable or not: a session no VS Code window owns
+// is cleared only by a click in the popover. Only a jumpable row asks
 // to navigate, and navigating is what closes the popover.
 const click = (): void => {
   emit('read', props.session.id)
@@ -42,12 +42,6 @@ const click = (): void => {
         :label="props.session.label"
         :unread="props.session.unread"
       />
-      <span
-        v-if="props.session.isCurrent"
-        class="shrink-0 text-1 text-neutral-5"
-      >
-        you are here
-      </span>
     </span>
     <SessionRowDetail
       :status="props.session.status"

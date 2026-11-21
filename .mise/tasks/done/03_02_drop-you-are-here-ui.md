@@ -9,7 +9,7 @@ Session rows no longer show the "you are here" mark, because the app no longer h
 - src/types/Session.ts
 - src/components/molecules/SessionRow.vue
 - docs/design/menubar-ux.md
-- src/__test__/aSession.ts (test fixture; sets `isCurrent`)
+- src/**test**/aSession.ts (test fixture; sets `isCurrent`)
 - src/components/organisms/SessionList.test.ts (test; sets `isCurrent`)
 
 ## Background

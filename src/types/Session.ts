@@ -11,7 +11,6 @@ export interface Session {
   status: SessionStatus
   unread: boolean
   jumpable: boolean
-  isCurrent: boolean
   workingTimeMs: number
   longestTurnMs: number
   notificationMessage: string | null
