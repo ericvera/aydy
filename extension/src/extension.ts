@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename } from 'node:path'
 
 import * as vscode from 'vscode'
@@ -11,17 +12,24 @@ import {
 } from './hookNotice'
 import { ensureHooks, installHookScript } from './hookInstall'
 import { JumpResponder } from './jumpRequests'
-import { offerKey, reopenAsWorkspace, shouldOffer } from './reopenOffer'
+import { listReasons, reopenAsWorkspace, unsafeReasons } from './autoReopen'
 import type { RevealEnvironment } from './revealSession'
 import { revealSession, versionOf } from './revealSession'
 import { tabTitle } from './sessionState'
+import { sessionsUnder } from './processTree'
 import { publishWindow, unpublishWindow } from './windowRegistry'
 import { WindowTracker } from './windowTracker'
 import {
-  isGeneratedWorkspace,
+  isLegacyWorkspace,
   readWorkspaceFolder,
+  registerWorkspace,
+  removeLegacyWorkspace,
   setWorkspaceTitle,
+  siblingWorkspacePath,
+  sweepWorkspaces,
   syncFolderSettings,
+  workspaceState,
+  writeWorkspace,
 } from './workspaceFile'
 
 /**
@@ -97,21 +105,16 @@ const syncSettings = (path: string): void => {
   enqueueWorkspaceWrite(() => syncFolderSettings(path))
 }
 
-const generatedWorkspaceFile = (): string | undefined => {
+const openWorkspaceFile = (): string | undefined => {
   const file = vscode.workspace.workspaceFile
-  return file?.scheme === 'file' && isGeneratedWorkspace(file.fsPath)
-    ? file.fsPath
-    : undefined
+  return file?.scheme === 'file' ? file.fsPath : undefined
 }
 
 const keepGeneratedWorkspace = async (
   context: vscode.ExtensionContext,
   path: string,
+  folder: string,
 ): Promise<void> => {
-  const folder = await readWorkspaceFolder(path)
-  if (folder === null) {
-    return
-  }
   generated = { path, folder }
   syncSettings(path)
   writeTitle()
@@ -135,68 +138,187 @@ const keepGeneratedWorkspace = async (
   )
 }
 
-const REOPEN_MESSAGE =
-  "Show how many Claude Code sessions need you in this window's tab? AYDY reopens this window from a workspace file kept outside the repo. This restarts the window, which may end Claude Code sessions open in it."
+/** The setting that turns automatic reopening off. */
+const AUTO_REOPEN_SETTING = 'autoReopenAsWorkspace'
+
+/**
+ * How long a freshly opened window is left to settle before AYDY looks at what
+ * is in it: VS Code restores terminals and Claude Code restores its tabs just
+ * after startup, and reopening before they show up would end them unseen.
+ */
+const SETTLE_MS = 1500
+
+const REOPEN_ANYWAY = 'Reopen anyway'
 const NOT_NOW = 'Not now'
-const REOPEN = 'Reopen as workspace'
+const OVERWRITE = 'Overwrite'
 const SINGLE_FOLDER_ONLY =
   'AYDY: The session count in the tab title only applies to a window opened as a single folder.'
 
+const tildePath = (path: string): string => {
+  const home = homedir()
+  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+}
+
+const confirmOverwrite = async (path: string): Promise<boolean> =>
+  (await vscode.window.showWarningMessage(
+    `${tildePath(path)} already exists and was not created by AYDY. Overwrite it?`,
+    {
+      modal: true,
+      detail:
+        'AYDY keeps this window’s workspace file beside the folder so it is easy to find. If you keep the existing file, AYDY stores its workspace file in its own data folder instead.',
+    },
+    OVERWRITE,
+  )) === OVERWRITE
+
+const openFolder = (
+  path: string,
+  options: { forceReuseWindow: boolean },
+): Thenable<unknown> =>
+  vscode.commands.executeCommand(
+    'vscode.openFolder',
+    vscode.Uri.file(path),
+    options,
+  )
+
 const openWorkspace = async (folder: string): Promise<void> => {
   await reopenAsWorkspace(folder, tabTitle(unreadCount, basename(folder)), {
-    openFolder: (path, options) =>
-      vscode.commands.executeCommand(
-        'vscode.openFolder',
-        vscode.Uri.file(path),
-        options,
-      ),
+    openFolder,
+    confirmOverwrite,
   })
 }
 
-const workspaceFileName = (): string | undefined =>
-  vscode.workspace.workspaceFile?.toString()
+/** What reopening this window now would end, in words; empty when safe. */
+const reasonsNotToReopen = async (): Promise<string[]> =>
+  unsafeReasons({
+    terminals: vscode.window.terminals.length,
+    claudeTabs: vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .filter(isClaudeTab).length,
+    claudeSessions: await sessionsUnder(process.pid).catch((error: unknown) => {
+      log(error)
+      // Unknown counts as unsafe, so a failed check never ends a session.
+      return 1
+    }),
+    dirtyDocuments: vscode.workspace.textDocuments.filter((doc) => doc.isDirty)
+      .length,
+  })
 
-const offerReopen = async (
-  context: vscode.ExtensionContext,
-  folders: string[],
-): Promise<void> => {
-  const folder = folders[0]
-  if (
-    folder === undefined ||
-    !shouldOffer({
-      workspaceFile: workspaceFileName(),
-      folders,
-      offered: context.globalState.get<boolean>(offerKey(folder)) === true,
-    })
-  ) {
+const autoReopenEnabled = (): boolean =>
+  vscode.workspace
+    .getConfiguration('aydy')
+    .get<boolean>(AUTO_REOPEN_SETTING, true)
+
+const settle = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, SETTLE_MS))
+
+/**
+ * Reopens a plain single-folder window as its workspace file without asking,
+ * when nothing in it would be lost. Otherwise it says what is in the way and
+ * leaves the choice to the user.
+ */
+const autoReopen = async (folder: string): Promise<void> => {
+  if (!autoReopenEnabled()) {
     return
   }
-  // Marked before asking, so a reload during the notice cannot show it twice.
-  await context.globalState.update(offerKey(folder), true)
+  await settle()
+  if (openWorkspaceFile() !== undefined) {
+    return
+  }
+  const reasons = await reasonsNotToReopen()
+  if (reasons.length === 0) {
+    await openWorkspace(folder)
+    return
+  }
   const choice = await vscode.window.showInformationMessage(
-    REOPEN_MESSAGE,
+    `AYDY shows how many Claude Code sessions need you in this window’s tab by reopening it as a workspace. It did not reopen it automatically because reopening would end the ${listReasons(reasons)} open in it.`,
     NOT_NOW,
-    REOPEN,
+    REOPEN_ANYWAY,
   )
-  if (choice === REOPEN) {
+  if (choice === REOPEN_ANYWAY) {
     await openWorkspace(folder)
   }
+}
+
+/**
+ * Moves a window opened from a workspace file in AYDY's data folder onto the
+ * same file beside the folder, when that spot is free or already AYDY's and
+ * nothing in the window would be lost. A spot taken by your own file is left
+ * alone, so this never asks.
+ */
+const migrateLegacy = async (folder: string, legacy: string): Promise<void> => {
+  if (!autoReopenEnabled()) {
+    return
+  }
+  const sibling = siblingWorkspacePath(folder)
+  const state = await workspaceState(sibling, folder)
+  if (state === 'foreign') {
+    return
+  }
+  await settle()
+  if ((await reasonsNotToReopen()).length > 0) {
+    return
+  }
+  if (state === 'free') {
+    await writeWorkspace(
+      sibling,
+      folder,
+      tabTitle(unreadCount, basename(folder)),
+    )
+  }
+  await registerWorkspace(sibling, folder)
+  await workspaceWrites
+  await openFolder(sibling, { forceReuseWindow: true })
+  console.info(`AYDY: moved ${legacy} to ${sibling}`)
 }
 
 const showCountInTabTitle = async (folders: string[]): Promise<void> => {
   const folder = folders[0]
   if (
     folder === undefined ||
-    !shouldOffer({
-      workspaceFile: workspaceFileName(),
-      folders,
-      offered: false,
-    })
+    folders.length !== 1 ||
+    openWorkspaceFile() !== undefined
   ) {
     await vscode.window.showInformationMessage(SINGLE_FOLDER_ONLY)
     return
   }
   await openWorkspace(folder)
+}
+
+/** The once-per-folder offer flags earlier versions kept; now unused. */
+const forgetOfferFlags = async (
+  context: vscode.ExtensionContext,
+): Promise<void> => {
+  for (const key of context.globalState.keys()) {
+    if (key.startsWith('aydy.reopenOffered:')) {
+      await context.globalState.update(key, undefined)
+    }
+  }
+}
+
+/** Decides what this window does with workspace files as it starts. */
+const startWorkspace = async (
+  context: vscode.ExtensionContext,
+  folders: string[],
+): Promise<void> => {
+  const current = openWorkspaceFile()
+  if (current === undefined) {
+    const folder = folders[0]
+    if (folder !== undefined && folders.length === 1) {
+      await autoReopen(folder)
+    }
+    return
+  }
+  const folder = await readWorkspaceFolder(current)
+  if (folder === null) {
+    return
+  }
+  await keepGeneratedWorkspace(context, current, folder)
+  if (isLegacyWorkspace(current)) {
+    await migrateLegacy(folder, current)
+  } else {
+    await registerWorkspace(current, folder)
+    await removeLegacyWorkspace(folder)
+  }
 }
 
 const localFolders = (): string[] =>
@@ -316,12 +438,9 @@ export const activate = (context: vscode.ExtensionContext): void => {
     reveal: async (request) => revealSession(request, revealEnvironment),
   })
 
-  const generatedPath = generatedWorkspaceFile()
-  if (generatedPath === undefined) {
-    offerReopen(context, folders).catch(log)
-  } else {
-    keepGeneratedWorkspace(context, generatedPath).catch(log)
-  }
+  startWorkspace(context, folders).catch(log)
+  forgetOfferFlags(context).catch(log)
+  sweepWorkspaces().catch(log)
 
   context.subscriptions.push(
     { dispose: () => void unpublish() },

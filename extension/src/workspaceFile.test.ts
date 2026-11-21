@@ -1,11 +1,12 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
-  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -16,12 +17,17 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import type { WorkspaceDirs } from './workspaceFile'
 import {
   buildWorkspace,
-  generatedWorkspacePath,
-  isGeneratedWorkspace,
+  isLegacyWorkspace,
   jsonEqual,
+  legacyWorkspacePath,
   readWorkspaceFolder,
+  registerWorkspace,
+  removeLegacyWorkspace,
   setWorkspaceTitle,
+  siblingWorkspacePath,
+  sweepWorkspaces,
   syncFolderSettings,
+  workspaceState,
   writeWorkspace,
 } from './workspaceFile'
 
@@ -40,6 +46,12 @@ afterEach(() => {
   rmSync(root, { force: true, recursive: true })
 })
 
+const write = async (title: string | null): Promise<string> => {
+  const path = siblingWorkspacePath(folder)
+  await writeWorkspace(path, folder, title)
+  return path
+}
+
 const writeFolderSettings = (text: string): void => {
   writeFileSync(join(folder, '.vscode', 'settings.json'), text)
 }
@@ -56,29 +68,29 @@ const editFile = (
   writeFileSync(path, JSON.stringify(doc, null, 2))
 }
 
-it('generatedWorkspacePath: is stable and lives under a 12-hex hash dir', () => {
-  const first = generatedWorkspacePath(folder, dirs)
-  expect(generatedWorkspacePath(folder, dirs)).toBe(first)
+it('siblingWorkspacePath: sits beside the folder, named after it', () => {
+  expect(siblingWorkspacePath('/Users/me/Code/okven')).toBe(
+    '/Users/me/Code/okven.code-workspace',
+  )
+  expect(siblingWorkspacePath('/Users/me/Code/okven.worktrees/feat-x')).toBe(
+    '/Users/me/Code/okven.worktrees/feat-x.code-workspace',
+  )
+})
+
+it('legacyWorkspacePath: is stable and lives under a 12-hex hash dir', () => {
+  const first = legacyWorkspacePath(folder, dirs)
+  expect(legacyWorkspacePath(folder, dirs)).toBe(first)
   expect(first).toMatch(
     new RegExp(`^${dirs.workspaces}/[0-9a-f]{12}/okven\\.code-workspace$`),
   )
-  expect(generatedWorkspacePath(join(root, 'other'), dirs)).not.toBe(first)
-})
-
-it('writeWorkspace: hashes the realpath so a symlinked folder maps to one file', async () => {
-  const link = join(root, 'link-to-okven')
-  symlinkSync(folder, link)
-  const direct = await writeWorkspace(folder, null, dirs)
-  const viaLink = await writeWorkspace(link, null, dirs)
-  expect(viaLink).toBe(direct)
-  expect(direct).toBe(generatedWorkspacePath(folder, dirs))
+  expect(legacyWorkspacePath(join(root, 'other'), dirs)).not.toBe(first)
 })
 
 it('writeWorkspace: writes folders, copied settings, the title and the aydy record', async () => {
   writeFolderSettings(
     '{\n  // comment\n  "editor.tabSize": 4,\n  "files.exclude": {"out": true},\n  "window.title": "repo title",\n}',
   )
-  const path = await writeWorkspace(folder, '○ okven', dirs)
+  const path = await write('○ okven')
   const text = readFileSync(path, 'utf8')
   expect(text.endsWith('}\n')).toBe(true)
   expect(text).toContain('\n  "folders"')
@@ -97,7 +109,7 @@ it('writeWorkspace: writes folders, copied settings, the title and the aydy reco
 })
 
 it('writeWorkspace: a missing folder settings file copies nothing', async () => {
-  const path = await writeWorkspace(folder, null, dirs)
+  const path = await write(null)
   expect(readJson(path)).toEqual({
     folders: [{ path: folder }],
     settings: {},
@@ -107,7 +119,7 @@ it('writeWorkspace: a missing folder settings file copies nothing', async () => 
 
 it('syncFolderSettings: removes deleted keys, keeps user-added keys and keeps the title', async () => {
   writeFolderSettings('{"a": 1, "b": 2}')
-  const path = await writeWorkspace(folder, '● okven', dirs)
+  const path = await write('● okven')
   editFile(path, (doc) => {
     ;(doc['settings'] as Record<string, unknown>)['user.added'] = true
   })
@@ -121,7 +133,7 @@ it('syncFolderSettings: removes deleted keys, keeps user-added keys and keeps th
 })
 
 it('syncFolderSettings: keeps folders the user added, primary first', async () => {
-  const path = await writeWorkspace(folder, null, dirs)
+  const path = await write(null)
   editFile(path, (doc) => {
     doc['folders'] = [{ path: '/other' }, { path: folder, name: 'Mine' }, 7]
   })
@@ -144,7 +156,7 @@ it('buildWorkspace: keeps an existing [primary, other] folder list intact', () =
 
 it('syncFolderSettings: keeps user edits to copied keys and updates unedited ones', async () => {
   writeFolderSettings('{"edited": 1, "dropped": 1, "plain": 1}')
-  const path = await writeWorkspace(folder, null, dirs)
+  const path = await write(null)
   editFile(path, (doc) => {
     const settings = doc['settings'] as Record<string, unknown>
     settings['edited'] = 'user'
@@ -171,7 +183,7 @@ it('jsonEqual: ignores key order and compares structurally', () => {
 })
 
 it('setWorkspaceTitle: writes a changed title and skips an unchanged one', async () => {
-  const path = await writeWorkspace(folder, '○ okven', dirs)
+  const path = await write('○ okven')
   const past = new Date(Date.now() - 60_000)
   utimesSync(path, past, past)
   const before = statSync(path).mtimeMs
@@ -185,7 +197,7 @@ it('setWorkspaceTitle: writes a changed title and skips an unchanged one', async
 
 it('syncFolderSettings: a broken folder settings file keeps the prior copy', async () => {
   writeFolderSettings('{"a": 1}')
-  const path = await writeWorkspace(folder, '○ okven', dirs)
+  const path = await write('○ okven')
   writeFolderSettings('{"a": 2, "b":')
   await syncFolderSettings(path)
   expect(readJson(path)).toEqual({
@@ -195,19 +207,106 @@ it('syncFolderSettings: a broken folder settings file keeps the prior copy', asy
   })
 })
 
-it('isGeneratedWorkspace: is true only for paths under the workspaces dir', () => {
-  expect(isGeneratedWorkspace(generatedWorkspacePath(folder, dirs), dirs)).toBe(
-    true,
+it('isLegacyWorkspace: is true only for paths under the workspaces dir', () => {
+  expect(isLegacyWorkspace(legacyWorkspacePath(folder, dirs), dirs)).toBe(true)
+  expect(isLegacyWorkspace(dirs.workspaces, dirs)).toBe(false)
+  expect(isLegacyWorkspace(`${dirs.workspaces}-x/a.code-workspace`, dirs)).toBe(
+    false,
   )
-  expect(isGeneratedWorkspace(dirs.workspaces, dirs)).toBe(false)
-  expect(
-    isGeneratedWorkspace(`${dirs.workspaces}-x/a.code-workspace`, dirs),
-  ).toBe(false)
-  expect(isGeneratedWorkspace(join(root, 'a.code-workspace'), dirs)).toBe(false)
+  expect(isLegacyWorkspace(join(root, 'a.code-workspace'), dirs)).toBe(false)
+})
+
+it('workspaceState: tells a missing, an AYDY and a foreign file apart', async () => {
+  const path = siblingWorkspacePath(folder)
+  expect(await workspaceState(path, folder)).toBe('free')
+  await write(null)
+  expect(await workspaceState(path, folder)).toBe('ours')
+  expect(await workspaceState(path, join(root, 'moved'))).toBe('foreign')
+  writeFileSync(path, '{"folders": [{"path": "."}]}')
+  expect(await workspaceState(path, folder)).toBe('foreign')
+})
+
+it('writeWorkspace: fresh replaces a foreign file instead of merging into it', async () => {
+  const path = siblingWorkspacePath(folder)
+  writeFileSync(
+    path,
+    '{"folders": [{"path": "/x"}], "settings": {"mine": true}, "extensions": {}}',
+  )
+  await writeWorkspace(path, folder, '○ okven', { fresh: true })
+  expect(readJson(path)).toEqual({
+    folders: [{ path: folder }],
+    settings: { 'window.title': '○ okven' },
+    aydy: { folder, copiedSettings: {} },
+  })
+})
+
+it('sweepWorkspaces: removes a registered file whose folder is gone, and only that', async () => {
+  const kept = await write(null)
+  await registerWorkspace(kept, folder, dirs)
+  const gone = join(root, 'feat-x')
+  mkdirSync(gone)
+  const stale = siblingWorkspacePath(gone)
+  await writeWorkspace(stale, gone, null)
+  await registerWorkspace(stale, gone, dirs)
+  rmSync(gone, { recursive: true })
+
+  expect(await sweepWorkspaces(dirs)).toEqual([stale])
+  expect(existsSync(stale)).toBe(false)
+  expect(existsSync(kept)).toBe(true)
+  expect(readdirSync(join(dirs.workspaces, 'index'))).toHaveLength(1)
+})
+
+it("sweepWorkspaces: leaves a file that is no longer AYDY's for that folder", async () => {
+  const gone = join(root, 'feat-x')
+  mkdirSync(gone)
+  const path = siblingWorkspacePath(gone)
+  await writeWorkspace(path, gone, null)
+  await registerWorkspace(path, gone, dirs)
+  writeFileSync(path, '{"folders": []}')
+  rmSync(gone, { recursive: true })
+
+  expect(await sweepWorkspaces(dirs)).toEqual([])
+  expect(existsSync(path)).toBe(true)
+  expect(readdirSync(join(dirs.workspaces, 'index'))).toHaveLength(0)
+})
+
+it("sweepWorkspaces: keeps a file whose folder's parent is missing, like an unmounted volume", async () => {
+  const volume = join(root, 'Volumes', 'ext')
+  const repo = join(volume, 'repo')
+  mkdirSync(repo, { recursive: true })
+  const path = legacyWorkspacePath(repo, dirs)
+  await writeWorkspace(path, repo, null)
+  rmSync(volume, { recursive: true })
+
+  expect(await sweepWorkspaces(dirs)).toEqual([])
+  expect(existsSync(path)).toBe(true)
+})
+
+it('sweepWorkspaces: removes a legacy file whose folder is gone', async () => {
+  const gone = join(root, 'feat-x')
+  mkdirSync(gone)
+  const path = legacyWorkspacePath(gone, dirs)
+  await writeWorkspace(path, gone, null)
+  const live = legacyWorkspacePath(folder, dirs)
+  await writeWorkspace(live, folder, null)
+  rmSync(gone, { recursive: true })
+
+  expect(await sweepWorkspaces(dirs)).toEqual([path])
+  expect(existsSync(path)).toBe(false)
+  expect(existsSync(live)).toBe(true)
+})
+
+it("removeLegacyWorkspace: removes only AYDY's legacy file for that folder", async () => {
+  const path = legacyWorkspacePath(folder, dirs)
+  await writeWorkspace(path, folder, null)
+  await removeLegacyWorkspace(join(root, 'other'), dirs)
+  expect(existsSync(path)).toBe(true)
+  await removeLegacyWorkspace(folder, dirs)
+  expect(existsSync(path)).toBe(false)
 })
 
 it('readWorkspaceFolder: returns aydy.folder or null', async () => {
-  const path = await writeWorkspace(folder, null, dirs)
+  const path = await write(null)
   expect(await readWorkspaceFolder(path)).toBe(folder)
   expect(await readWorkspaceFolder(join(root, 'missing.code-workspace'))).toBe(
     null,
