@@ -20,7 +20,10 @@ Add the code that creates and maintains AYDY's generated `.code-workspace` file 
 {
   "folders": [{ "path": "/abs/folder" }],
   "settings": { "<copied keys>": "...", "window.title": "○ okven" },
-  "aydy": { "folder": "/abs/folder", "copiedSettings": { "<copied key>": "<value AYDY last copied>" } }
+  "aydy": {
+    "folder": "/abs/folder",
+    "copiedSettings": { "<copied key>": "<value AYDY last copied>" }
+  }
 }
 ```
 
@@ -50,6 +53,7 @@ None match.
     5. Set `aydy = {folder, copiedSettings: copied}`.
 
     The `window.title` from folder settings is not copied, since AYDY owns it.
+
   - `jsonEqual(a, b)` is a structural equality over JSON values (objects compared by key set, not key order).
   - `readFolderSettings(folder)` reads `<folder>/.vscode/settings.json` with `parseJsonc`. A missing file gives `{}`. A parse failure gives `null`, which tells the caller to keep the previous copy.
   - `writeWorkspace(folder, title, dirs?)` uses realpath and writes `generatedWorkspacePath(real, dirs)` with `buildWorkspace(readExisting(), folder, readFolderSettings() ?? previousCopied, title)`, where `previousCopied` is the existing `aydy.copiedSettings` object. It creates the directories under `dirs.workspaces` and returns the path.
