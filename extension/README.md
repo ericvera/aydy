@@ -31,8 +31,8 @@ is scanned as an extension whose manifest cannot be read, which is reported as *
 extensions detected** in the Extensions view of every open window until the entry is
 removed.
 
-Beyond installing there is nothing to configure, and this extension contributes no
-settings on purpose. It works whether or not AYDY is running, because it only reads and
+The extension contributes one setting, `aydy.autoReopenAsWorkspace`, and beyond
+installing nothing else needs configuring. It works whether or not AYDY is running, because it only reads and
 writes files.
 
 ## What it does
@@ -88,24 +88,44 @@ last had the window focused.
 
 VS Code only lets an extension set a window's title through a settings file, and a
 plain-folder window's only settings file is the repository's own `.vscode/settings.json`.
-So the title is written into a workspace file AYDY generates and keeps **outside the
-repository**, at
-`~/Library/Application Support/app.aydy/workspaces/<hash>/<folder>.code-workspace`, one
-per folder. The folder's own `.vscode/settings.json` is copied into that file, and copied
-again whenever it is created, changed or deleted, so the window keeps behaving the way
-the repository says. Whether a window-scoped setting in `.vscode/settings.json` applies
-in such a window only through that copy has **not been verified**.
+So the title is written into a workspace file AYDY generates **beside the folder**, named
+after it: `~/Code/okven` gets `~/Code/okven.code-workspace`, and a worktree at
+`~/Code/okven.worktrees/feat-x` gets `~/Code/okven.worktrees/feat-x.code-workspace`. That
+keeps it out of the repository while still easy to find in Finder and in Open Recent,
+where it is listed as `okven (Workspace)`. Opening that file directly skips the reopen
+below. The folder's own `.vscode/settings.json` is copied into the workspace file, and
+copied again whenever it is created, changed or deleted, so the window keeps behaving the
+way the repository says. Whether a window-scoped setting in `.vscode/settings.json`
+applies in such a window only through that copy has **not been verified**.
 
-Getting a window onto that file means reopening it:
+Getting a window onto that file means reopening it, which restarts the window:
 
-- **The offer.** The first time a folder is opened as a plain single-folder window, a
-  notification asks whether to reopen it as a workspace, with **Not now** and **Reopen as
-  workspace**. It is shown once per folder, whichever you pick.
+- **Automatically.** When a single folder is opened as a plain window, AYDY waits a
+  moment for VS Code to restore terminals and tabs, then reopens it as its workspace
+  without asking — unless a Claude Code session in it is working or waiting on you, a
+  terminal in it is running a process (a dev server, a build, the Claude Code CLI), or it
+  has unsaved files. Idle terminals at a prompt and idle Claude Code sessions do not
+  block; a restarted session comes back idle. Anything AYDY cannot check counts as
+  running. If something blocks, a notification says what, with **Not now** and
+  **Reopen anyway**. Turn this off with
+  the `aydy.autoReopenAsWorkspace` setting.
 - **The command.** `AYDY: Show Session Count in Tab Title` in the command palette does
-  the same reopen at any time. It is listed only in a plain-folder window.
+  the same reopen at any time, without the safety check. It is listed only in a
+  plain-folder window.
 
-Nothing reopens without that click. **Reopening restarts the window**, which may end
-Claude Code sessions open in it.
+If a `.code-workspace` that AYDY did not write already sits where AYDY's would go, AYDY
+asks before overwriting it. Declining keeps your file and puts AYDY's in
+`~/Library/Application Support/app.aydy/workspaces/<hash>/<folder>.code-workspace` instead
+— where earlier versions kept every workspace file. A window opened from one of those
+older files moves itself onto the file beside the folder the next time it opens with
+nothing in it that a restart would end.
+
+AYDY marks its files with an `aydy` record naming the folder, and keeps an index of them
+in `~/Library/Application Support/app.aydy/workspaces/index/`. Each time a window starts,
+it removes the files it wrote for folders that no longer exist — a deleted worktree's
+workspace file, say — as long as the file still carries AYDY's record for that folder and
+the folder's parent directory is still there, so an unmounted volume's folders are never
+taken for deleted.
 
 Plain-folder windows keep VS Code's default title, and a window opened from a
 `.code-workspace` of your own is left alone: nothing is written there. Folder names go
