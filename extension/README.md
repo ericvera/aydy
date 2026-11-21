@@ -31,8 +31,8 @@ is scanned as an extension whose manifest cannot be read, which is reported as *
 extensions detected** in the Extensions view of every open window until the entry is
 removed.
 
-Beyond installing there is nothing to configure, and this extension contributes no
-settings on purpose. It works whether or not AYDY is running, because it only reads and
+The extension contributes one setting, `aydy.autoReopenAsWorkspace`, and beyond
+installing nothing else needs configuring. It works whether or not AYDY is running, because it only reads and
 writes files.
 
 ## What it does
