@@ -64,5 +64,5 @@ None match.
   - the first claim is true and the second false
   - release followed by a claim is true again
   - `failureMessage` copy for each reason
-- `uninstall.ts` stays a one-line call into `removeHooks`, which 01_02 tests. As a substitute check, run `node extension/out/uninstall.js` after `yarn build-extension` with `HOME` pointed at a temp dir holding a settings file with AYDY entries, and confirm they are removed.
+- `uninstall.ts` stays a one-line call into `removeHooks`, which 01_02 tests. As a substitute check, run `node extension/out/uninstall.js` after `yarn build-extension` as `env -u CLAUDE_CONFIG_DIR HOME=<temp dir> node extension/out/uninstall.js`, where the temp dir holds `.claude/settings.json` with AYDY entries, and confirm they are removed. Unsetting `CLAUDE_CONFIG_DIR` keeps it from reaching the owner's real settings file (spec, "Verification boundary").
 - Run `yarn test`, `yarn build-tsc`, `yarn lint` and `yarn build-extension`.

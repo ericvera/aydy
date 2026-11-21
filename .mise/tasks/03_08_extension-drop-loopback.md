@@ -49,6 +49,12 @@ None match.
 ## Gotchas
 
 - Do not remove `revealSession`, `isClaudeTab` or `REVEAL_COMMAND`. Jump still uses them.
+- `extension.ts`'s `onDidChangeWorkspaceFolders` handler (`:153` before stage 1) and `onDidChangeWindowState` subscription (`:159` before stage 1) are shared. Since 01_05 and 01_07 they also carry work that must stay:
+  - `onDidChangeWorkspaceFolders`: the folder rebuild (`fs.realpathSync` over the workspace folders), `publishWindow(process.pid, folders)`, and `poke()` on the `WindowTracker` (01_05), plus any title or reopen wiring 01_07 hung on folder changes.
+  - `onDidChangeWindowState`: `poke()` on the `WindowTracker` (01_05).
+  - Also keep the `WindowTracker` itself, its `onCount` (which writes the title through `setWorkspaceTitle`, 01_07), the `.vscode/settings.json` watcher, the reopen offer and command, `installTracking` and the `JumpResponder`.
+
+  Remove only the client and reporter parts: `started.update(windowFacts())` from the folder handler, `reportFocus` from the window-state subscription (keep the subscription if it still pokes the tracker), the `onDidChangeTabs`/`onDidChangeTabGroups` subscriptions that only call `reportFocus`, and the disposable that calls `focus.dispose()` and `started.close()`. Read the file as it is after 01_05, 01_07 and 02_06 before editing; the line numbers above are from before stage 1.
 - Grep `extension/src` for `aydyClient`, `focusReporter`, `listener.json` and `aydyPortFilePath` afterwards.
 
 ## Verification

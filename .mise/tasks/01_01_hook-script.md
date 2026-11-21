@@ -28,19 +28,23 @@ None match.
 
 ```sh
 #!/bin/sh
+# AYDY hook script v1
 dir="$HOME/Library/Application Support/app.aydy/status"
-payload=$(cat)
-field() { printf '%s\n' "$payload" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([A-Za-z0-9_-]\{1,128\}\)\".*/\1/p" | head -n 1; }
-id=$(field session_id)
-[ -n "$id" ] || exit 0
-event=$(field hook_event_name)
-if [ "$event" = SessionEnd ]; then rm -f "$dir/$id.json"; exit 0; fi
 mkdir -p "$dir" 2>/dev/null || exit 0
-tmp="$dir/.$id.$$.tmp"
-printf '%s' "$payload" > "$tmp" 2>/dev/null && mv -f "$tmp" "$dir/$id.json" 2>/dev/null
+tmp="$dir/.hook.$$.tmp"
+cat > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; exit 0; }
+field() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([A-Za-z0-9_-]\{1,128\}\)\".*/\1/p" "$tmp" 2>/dev/null | head -n 1; }
+id=$(field session_id)
+if [ -z "$id" ]; then rm -f "$tmp" 2>/dev/null; exit 0; fi
+event=$(field hook_event_name)
+if [ "$event" = SessionEnd ]; then rm -f "$tmp" "$dir/$id.json" 2>/dev/null; exit 0; fi
+mv -f "$tmp" "$dir/$id.json" 2>/dev/null
 rm -f "$tmp" 2>/dev/null
 exit 0
 ```
+
+- stdin goes straight into the temp file with `cat`, and the fields are read back from that file. Do not capture the payload with `payload=$(cat)`: command substitution strips trailing newlines, so the stored file would not be byte-identical to the input.
+- The temp file name starts with `.`, which every reader skips (02_02, 01_04).
 
 - Every path must print nothing to stdout or stderr and exit 0.
 - The file's mtime is the event time, and readers rely on it. Do not add a timestamp field.
@@ -65,10 +69,11 @@ exit 0
 ## Verification
 
 - New `extension/src/hookScript.test.ts` runs the script with `spawnSync('/bin/sh', [script], {input, env: {HOME: tmp, PATH: process.env.PATH}})` and covers:
-  - A `Stop` payload writes `status/<id>.json` byte-identical to the input.
+  - A `Stop` payload writes `status/<id>.json` byte-identical to the input. Run it twice: once with input ending in `\n` (as Claude Code sends it) and once with input ending in `}`; both files must equal their input byte for byte.
   - `SessionEnd` removes it.
   - A payload with no `session_id`, invalid JSON, and an id containing `/` or `..` write nothing and exit 0.
   - A `message` field containing `\"session_id\":\"evil\"` still writes under the real id.
   - stdout and stderr are empty in every case.
+  - No `.hook.*.tmp` file is left in `status/` after any case.
 - New `extension/src/aydyPaths.test.ts` covers the default paths and the `CLAUDE_CONFIG_DIR` override, including an empty override.
 - Run `yarn test`, `yarn build-tsc` and `yarn lint`.

@@ -36,11 +36,11 @@ Like the Rust writer (`atomic_file.rs:57-59`), the extension's writer keeps the 
 
 The script is POSIX `sh` with no dependencies. It is kept outside `src/` because `extension/.vscodeignore:4` drops `src/**` from the VSIX.
 
-1. It reads stdin into a variable.
-2. It extracts `session_id` and `hook_event_name` with `sed`, matching `"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"`. A key that appears inside a JSON string value is escaped as `\"session_id\"`, so it never matches.
-3. It exits 0 when the id is missing.
-4. On `SessionEnd` it runs `rm -f <data>/status/<id>.json`.
-5. Otherwise it writes the payload to `<data>/status/.<id>.$$.tmp` and runs `mv -f` onto `<id>.json`.
+1. It copies stdin with `cat` straight into `<data>/status/.hook.$$.tmp`, so the stored bytes are exactly the input, trailing newlines included (`$(cat)` would strip them).
+2. It extracts `session_id` and `hook_event_name` from that temp file with `sed`, matching `"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]{1,128})"`. A key that appears inside a JSON string value is escaped as `\"session_id\"`, so it never matches.
+3. When the id is missing it deletes the temp file and exits 0.
+4. On `SessionEnd` it runs `rm -f` on the temp file and on `<data>/status/<id>.json`.
+5. Otherwise it runs `mv -f` from the temp file onto `<id>.json`.
 6. It always exits 0 and prints nothing. `SessionStart` stdout would be injected into the session.
 
 Readers derive status from the payload's `hook_event_name`, using the existing mapping (`src-tauri/src/listener/routes.rs:61-86`):
@@ -73,6 +73,7 @@ f="$HOME/Library/Application Support/app.aydy/bin/aydy-hook.sh"; [ -f "$f" ] && 
 - A missing file is treated as `{}`. Invalid JSON is never written over and is reported.
 - Uninstall (`vscode:uninstall`) removes every marker entry and drops groups and events that end up empty. It leaves the script in place, which matches mock state C.
 - The app's legacy HTTP and curl entries stay in place through stages 1 and 2. They are removed in stage 3 by a one-time-per-start cleanup in the app (`hooks/legacy.rs`), which strips entries matching `merge::is_aydy_hook`.
+- The cleanup resolves a symlinked settings file to its real path before reading and writing, so the link survives, as the extension's writer does. `atomic_file::write_atomically` renames onto the path it is given (`atomic_file.rs:60`), so it must be given the resolved path.
 - That cleanup does **not** restore the `afplay` entries the old installer stashed in `removed-hooks.json` (owner decision 4). Sounds belong to the app, and restoring them would double every sound. The cleanup deletes the stash file `<app config dir>/removed-hooks.json`.
 
 ### Extension modules (`extension/src/`)
@@ -129,7 +130,7 @@ Generated workspace file:
 - The extension writes the title only in a window whose `vscode.workspace.workspaceFile` is under `<data>/workspaces/`. It writes only when the title changed, and the file is read fresh on every write.
 - The title is literal text, so the `(Workspace)` suffix never appears.
 
-Verified so far: the `window` namespace in the pinned `@types/vscode` 1.90.0 (`node_modules/@types/vscode/index.d.ts:10343-11100`) has no title API. `workspace.workspaceFile` exists (`index.d.ts:13080`). That workspace-file mode ignores window-scoped settings in `.vscode/settings.json` is still unverified. Task 01_07 verifies it by hand before closing. Either way the copy is harmless.
+Verified so far: the `window` namespace in the pinned `@types/vscode` 1.90.0 (`node_modules/@types/vscode/index.d.ts:10343-11100`) has no title API. `workspace.workspaceFile` exists (`index.d.ts:13080`). That workspace-file mode ignores window-scoped settings in `.vscode/settings.json` is still unverified. The owner checks it at acceptance (see "Verification boundary"). Either way the copy is harmless.
 
 ### Jump
 
@@ -164,14 +165,28 @@ Extension side:
   - `SessionRegistry` gains `apply_status(StatusRecord, now_ms)`, `apply_seen(id, ms)` and `mark_read(id, now_ms)`.
   - The focus-driven unread code goes: the `is_watched` gate at `registry.rs:217`, `read_window`, and the clear in `apply_focus_report`. The feed's first pass replays every live status file, so `apply_status` must not stamp records with the registry's `now`.
   - `mark_read` also writes the seen file.
-  - Sounds skip sessions that are not unread, in place of `is_current` (`notify/sound.rs:238`). The feed reads `seen/` after `status/` in the same pass, which keeps a session that finished in a focused window quiet whenever the extension has already written its seen time.
+  - Sounds skip sessions that are not unread, in place of `is_current` (`notify/sound.rs:238`). The feed reads `seen/` after `status/` in the same pass.
+  - A new `Stop` or `Notification` record is held for one feed pass before it is applied (02_04). The extension writes the seen file about 150 ms after the status file (its debounce), while the feed polls every 500 ms, so without the hold a pass could apply the record before the seen write lands and play a sound for a session that finished in a focused window. On the next pass the seen file is read in the same pass as the held record and applied with it, so the session is already read when the notifier observes it. The first pass holds nothing, because sounds are not armed yet. Other events apply at once.
 - **Tracking status**: a new `tracking.rs` exposes the IPC command `tracking_status`, which returns `{state: 'installed' | 'notInstalled' | 'hooksMissing'}`.
   - `notInstalled` means the script is missing.
   - `hooksMissing` means the script is present but some event lacks a marker entry.
   - It reads the settings file through `hooks::settings_file::SettingsFile::user()`.
   - The popover polls it every 2 s while it is not `installed`, and re-reads it each time the popover opens (the popover window gaining focus), so an uninstalled extension shows the install screen on the next open instead of a frozen list.
 - **`lock_recovering`** moves from `listener/server.rs:118` to a new `src-tauri/src/sync.rs`. The server re-exports it until the listener is deleted. Each later task that touches an importer switches it to `crate::sync` (02_03 for `notify/sound.rs` and `ipc/commands.rs`, 02_05 for `jump/mod.rs`, 03_03 for `ipc/snapshot_channel.rs`, 03_05 for `discovery/reconciler.rs`). Importers inside modules that are deleted (`extension/`, `hooks/install.rs`) keep the re-export until they go.
-- **Test fixtures outside the deleting task's files** are cleaned in the earlier task that owns the file: 02_03 deletes the focus harness and focus tests in `notify/sound.rs`; 02_05 removes the window placement (`Registration`, `ExtensionPid`, `FixedParents`, `window_map::associate`, `apply_window_map`) from the `ipc/commands.rs` `jumpable_session` fixture; 03_03 removes the installer test helpers from `ipc/commands.rs`; `ListenerHealth` is deleted in 03_04 with `hooks/install.rs`, whose tests use it; `SessionSnapshot.is_current` is deleted in 03_07, which also updates the fixtures in `tray/icon.rs` and `ipc/snapshot_channel.rs`.
+- **Test fixtures outside the deleting task's files** are cleaned in the earlier task that owns the file: 02_03 deletes the focus harness and focus tests in `notify/sound.rs`; 02_05 removes the window placement (`Registration`, `ExtensionPid`, `FixedParents`, `window_map::associate`, `apply_window_map`) from the `ipc/commands.rs` `jumpable_session` fixture and the `session.window = Some(..)` line from the `jump/mod.rs` test `a_session_that_cannot_be_jumped_to_has_nothing_to_jump_to`; 03_03 removes the installer test helpers from `ipc/commands.rs`; `ListenerHealth` is deleted in 03_04 with `hooks/install.rs`, whose tests use it; `SessionSnapshot.is_current` is deleted in 03_07, which also updates the fixtures in `tray/icon.rs` and `ipc/snapshot_channel.rs`.
+
+### Verification boundary
+
+The owner runs the installed `/Applications/AYDY.app` against the real home directory while this work is built. Its legacy `X-Aydy-Hook` entries in `~/.claude/settings.json` feed it, and `tauri-plugin-single-instance` (`src-tauri/src/lib.rs:78`) hands a second launch to it. So no implementer verification step in any task may:
+
+- launch the app (`yarn tauri dev`, `yarn tauri build` output, or the installed app) against the real home directory, or quit or restart the owner's installed app;
+- install the VSIX into the owner's VS Code, or run `yarn package-extension` (it writes over the owner's `extension/aydy-companion-0.1.0.vsix`);
+- read-modify-write, create or delete the real `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), the real `removed-hooks.json`, or any real file under `~/Library/Application Support/app.aydy/` (status, seen, windows, jump, workspaces, notices, bin), including `touch`.
+
+Tests and substitute checks use scratch directories, a temp `HOME` and an unset `CLAUDE_CONFIG_DIR`. Checks that need the real environment belong to the owner at acceptance:
+
+- the stage-3 app listens on no TCP port, removes the legacy entries and the stash on start, and the popover follows real sessions;
+- a plain-folder window accepts the reopen offer, the tab reads `○ <folder>`, a finished session turns it to `● <folder>` while unfocused and focusing clears it, and whether a window-scoped setting in `.vscode/settings.json` applies only through the copy.
 
 ### What gets removed, and when
 
@@ -194,8 +209,8 @@ Task files list deletions under "Files to delete". Those do not count toward the
 
 - The extension writes `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), the user's own config. It adds and refreshes the five AYDY command-hook entries, raced by every open window. The edit is check-first, atomic, aborts on change and retries once (01_02, 01_03).
 - Uninstalling the extension runs `vscode:uninstall`, which deletes AYDY's command-hook entries from the user's settings file (01_03).
-- On every start, the stage 3 app deletes the legacy `X-Aydy-Hook` HTTP/curl entries from the user's settings file. It does not restore the stashed `afplay` entries, and it deletes the stash file `removed-hooks.json` from the app config dir, so those entries cannot be restored later (owner decision 4, 03_04).
-- The extension's atomic writer rewrites `~/.claude/settings.json` through a symlink's real path and keeps the file's permissions (01_02).
+- On every start, the stage 3 app deletes the legacy `X-Aydy-Hook` HTTP/curl entries from the user's settings file, writing through a symlink's real path so the link survives. It does not restore the stashed `afplay` entries, and it deletes the stash file `removed-hooks.json` from the app config dir, so those entries cannot be restored later (owner decision 4, 03_04).
+- Both settings writers rewrite `~/.claude/settings.json` through a symlink's real path and keep the file's permissions: the extension's atomic writer (01_02) and the app's legacy cleanup (03_04).
 - Deletes in `<data>`: the extension prunes status and seen files older than 7 days for dead sessions (01_04), window files are deleted on dispose and when their pid is dead (01_04, 01_05), and jump requests and replies are deleted after use (02_05, 02_06). The hook script deletes a status file on `SessionEnd`.
 - Reopening a window from a generated `.code-workspace` restarts its extension host and may end Claude Code sessions running in it. It happens only on the owner's click (01_07).
 - Removed public surface:

@@ -30,8 +30,8 @@ The app stops serving the loopback HTTP listener and stops tracking VS Code wind
   - `lib.rs`: the listener spawn (`listener::server::run(memory, ports, registry, extensions, ...)`), `PortMemory` and `PortState`, `PORT_MEMORY_FILE`, `ExtensionRegistry`, `ExtensionCommands` and `LoopbackChannel` if still present, `ListenerShutdown` and its trigger on exit, `Reconciler::with_windows(windows, Arc::new(SystemParents))` (`lib.rs:229-230`), and the import `use crate::discovery::process_tree::SystemParents;` (`lib.rs:23`), which becomes unused.
   - `discovery/reconciler.rs`:
     - `with_windows(Arc<ExtensionRegistry>, Arc<dyn ProcessParents>)` (`:143`) and `associate` (`:283-296`), which calls `window_map::associate(live, registration pids, parents)`.
-    - Imports at `:12` (`process_tree::{ProcessParents, SystemParents}`), `:16` (`window_map`), `:17` (`ExtensionRegistry`) and `:18` (`listener::server::lock_recovering`).
-    - Its test module: imports `crate::discovery::process_tree::FixedParents` (`:490`) and `crate::extension::registry::Registration` (`:496`); the helper `extension_registry()` (`:1039-1050`); and the two window tests that use it or `registry.window_of` — `a_scan_places_each_session_it_sees_in_the_window_running_it` (`.with_windows(..)` at `:1066`, `window_of` asserts at `:1072-1073`) and `a_scan_with_no_extension_involved_places_no_session_in_a_window` (`:1076-1091`).
+    - Imports at `:12` (`process_tree::{ProcessParents, SystemParents}`), `:16` (`window_map::{self, WindowMap}`), `:17` (`ExtensionRegistry`), `:18` (`listener::server::lock_recovering`) and the `WindowId` in the `session::event` import at `:20`. `WindowId` is used only at `:288` (in `associate`) and `:1039` (the `extension_registry` test helper), and `window_map::self` only at `:294` (in `associate`); all three are deleted here.
+    - Its test module: imports `crate::discovery::process_tree::FixedParents` (`:490`) and `crate::extension::registry::Registration` (`:496`); the helper `extension_registry()` (`:1039-1050`); and the two window tests that use it or `registry.window_of` — `a_scan_places_each_session_it_sees_in_the_window_running_it` (`.with_windows(..)` at `:1064`, `window_of` asserts at `:1072-1073`) and `a_scan_with_no_extension_involved_places_no_session_in_a_window` (`:1076-1091`).
   - `discovery/window_map.rs`: its test module (`:94-282`) imports `crate::extension::registry::{ExtensionRegistry, Registration, REGISTRATION_TIMEOUT}` (`:103`). Task 03_06 deletes the whole file.
   - `session/event.rs:5` imports `ExtensionPid`, and `:19` defines `pub type WindowId = ExtensionPid;`.
 - Dependencies: `axum` is used only by the listener. `ureq` is used only by `extension/command.rs`'s `LoopbackChannel`. The tokio `net` feature may be needed only by the listener.
@@ -46,6 +46,7 @@ None match.
 - `reconciler.rs`:
   - Delete `with_windows`, the `extensions` and `parents` fields and `associate`. `Scan.windows` becomes `WindowMap::default()`, or remove the field if nothing reads it. 03_06 deletes `WindowMap` entirely, so prefer the smallest edit that compiles.
   - Drop the `process_tree`, `ExtensionRegistry` and listener imports, and switch `lock_recovering` to `crate::sync`.
+  - Drop `WindowId` from the `session::event` import (`:20`) and `self` from the `window_map` import (`:16`), leaving `use crate::discovery::window_map::WindowMap;` only if `Scan.windows` stays (as `WindowMap::default()`); otherwise drop the whole `window_map` import. Clippy flags unused imports, so `Check` fails if either is left.
   - In the test module, delete the `FixedParents` and `Registration` imports, the `extension_registry()` helper and the two window tests named above. Do not rewrite them: window association is gone.
 - `window_map.rs`: delete its whole `#[cfg(test)] mod tests` module. Do not rewrite it; 03_06 deletes the file. Leave the non-test code as is.
 - `lib.rs`:
@@ -55,7 +56,7 @@ None match.
 
 ## Gotchas
 
-- Grep `src-tauri/src` for `listener::`, `extension::`, `ExtensionPid`, `PortState`, `SystemParents`, `axum` and `ureq` after the change. All must be gone. If one remains in a file outside this list, an earlier task missed it: stop and report rather than widening this task.
+- Grep `src-tauri/src` for `listener::`, `extension::`, `ExtensionPid`, `PortState`, `axum` and `ureq` after the change. All must be gone. `SystemParents` is not on this list: it stays defined in `discovery/process_tree.rs` until 03_06; only `lib.rs` and the reconciler stop using it. If one remains in a file outside this list, an earlier task missed it: stop and report rather than widening this task.
 - `process_tree.rs` keeps `SystemParents` and `FixedParents` as unused `pub` items until 03_06 deletes it. That is expected; clippy does not flag `pub` items of a library crate.
 - `test_support.rs` and `discovery/mod.rs` test helpers may reference listener types. Fix any you find.
 - `RunEvent` exit handling must still trigger `ScanShutdown`, `ResumeShutdown`, `PublisherShutdown` and the `FeedShutdown` from 02_04.
@@ -64,4 +65,8 @@ None match.
 
 - `cargo test` and `cargo clippy` from `src-tauri/`, plus `cargo build` to confirm the dependency removal.
 - `yarn test`.
-- Substitute check, run against the real app: launch it (`yarn tauri dev`) and confirm nothing listens on loopback for it (`lsof -iTCP -sTCP:LISTEN -P | grep -i aydy` is empty). Then confirm the file feed still drives the popover without writing over any real session's data: pick an existing file in `~/Library/Application Support/app.aydy/status/` for a live session and `touch` it (this changes only its mtime, which the feed treats as a new event at that time), and check the row reorders or turns unread in the popover. Never create, edit or overwrite a status file there. Quit the app afterwards.
+- Substitute check that nothing listens any more, at test level only:
+  - `grep -rnE 'TcpListener|TcpStream|\.bind\(' src-tauri/src` returns nothing (today every hit is under `listener/` and `extension/`).
+  - `cargo tree -i axum` and `cargo tree -i ureq` (from `src-tauri/`) report that the package is not in the graph.
+  - `cargo test file_feed` passes, which covers the file feed driving the registry snapshot (02_04's tests, including `apply_changes` producing an unread session).
+- Do not launch the app (`yarn tauri dev` or any build), and do not quit or restart the owner's installed `/Applications/AYDY.app`. A dev launch would run 03_04's start-up cleanup against the owner's real `~/.claude/settings.json` (whose `X-Aydy-Hook` entries the installed app still depends on) and delete the real `removed-hooks.json`; `tauri-plugin-single-instance` (`src-tauri/src/lib.rs:78`) would likely hand the launch to the installed instance anyway, and `lsof` would always show the installed app listening. Do not create, edit, `touch` or delete anything under `~/Library/Application Support/app.aydy/`: touching a status file changes its recorded event time and makes that session unread in every window. The real-environment check (no TCP listener, popover follows real sessions) is the owner's at acceptance (spec, "Verification boundary").

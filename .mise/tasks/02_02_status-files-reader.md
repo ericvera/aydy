@@ -41,7 +41,7 @@ None match.
 
 ## Gotchas
 
-- Nothing here may be fatal or panic. Every bad file is skipped, as in `discovery/mod.rs:312-315`.
+- Nothing here may be fatal or panic. Every bad file is skipped, as `discovery/session_files.rs:71-96` (`read_all`) does: an unreadable entry or unrecognised file is skipped and counted, and only a missing or unreadable directory is an error (here, an empty result).
 - Keep `routes.rs` behaviour identical. Its tests must pass unchanged, apart from imports.
 - A status file whose stem differs from its `session_id` is skipped. That keeps a rename or a stray file from creating a phantom session.
 

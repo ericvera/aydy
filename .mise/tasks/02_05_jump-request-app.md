@@ -33,6 +33,7 @@ Clicking a session row asks VS Code windows to reveal it by writing a request fi
   - `:34` `crate::listener::server::lock_recovering` (switch to `crate::sync::lock_recovering`, in the tests too, where the fakes at `:731-827` call it)
   - `:35` `crate::session::event::WindowId` and the `WindowFocus` part of `:37`
   - the test module's `crate::extension::command::ExtensionChannel` and `crate::extension::registry::ExtensionRegistry` (`:639-640`)
+- `jump/mod.rs:1444`: the test `a_session_that_cannot_be_jumped_to_has_nothing_to_jump_to` sets `session.window = Some(65_921);`. `Session.window` is deleted in 03_06, whose files do not include `jump/mod.rs`, so this task removes the line.
 - `ipc/commands.rs` test module (`:458-480`) builds its `jumpable_session` fixture (`:801-831`) by placing the session in a window: it imports `crate::discovery::process_tree::FixedParents` (`:465`), `crate::discovery::window_map::associate` (`:467`) and `crate::extension::registry::{ExtensionPid, Registration}` (`:468`), defines `const WINDOW: ExtensionPid` (`:798`), and calls `registry.apply_window_map(&associate(...))` (`:819-828`). `apply_window_map`, `window_map.rs` and `process_tree.rs` are deleted in 03_06, and `extension/` in 03_05, so this fixture must stop using them here.
 
 ## Guides
@@ -78,7 +79,7 @@ None match.
   - a late claim (request unlinked, reply written within the grace period) gives `Jumped`
   - no `code` CLI gives `NoWindow` and writes nothing
   - a malformed reply gives `Unanswered`
-- Keep the `JumpTarget::of` tests, minus `window`.
+- Keep the `JumpTarget::of` tests, minus `window`. In `a_session_that_cannot_be_jumped_to_has_nothing_to_jump_to`, delete the `session.window = Some(65_921);` line and keep the test: `jumpable = false` alone gives `None`.
 - The `commands.rs` jump tests that use `jumpable_session` still pass without the window placement.
-- Grep `jump/mod.rs` and the `commands.rs` test module for `extension::`, `listener::`, `ExtensionPid`, `WindowId`, `WindowFocus`, `FixedParents`, `window_map` and `apply_window_map`. None may remain.
+- Grep `jump/mod.rs` and the `commands.rs` test module for `extension::`, `listener::`, `ExtensionPid`, `WindowId`, `WindowFocus`, `FixedParents`, `window_map`, `apply_window_map`, and the field access `.window` (`grep -nE '\.window\b'`, so `.windows` and `.window_count` do not count). None may remain.
 - Run `cargo test` and `cargo clippy` from `src-tauri/`.

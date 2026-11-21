@@ -33,7 +33,8 @@ None match.
 - `reopenOffer.ts` exports pure helpers plus a thin action.
   - `offerKey(folder)` returns `aydy.reopenOffered:<realpath>`.
   - `shouldOffer(state: {workspaceFile?: string, folders: string[], offered: boolean})` is true only for exactly one folder, no workspace file, and not yet offered.
-  - `reopenAsWorkspace(folder, title, env)` calls `writeWorkspace(folder, title)`, then `env.openFolder(Uri.file(path), {forceReuseWindow: true})`. In `extension.ts`, `env.openFolder` is `vscode.commands.executeCommand('vscode.openFolder', ...)`.
+  - `reopenAsWorkspace(folder, title, env)` calls `writeWorkspace(folder, title)`, then `env.openFolder(path, {forceReuseWindow: true})`, where `env: {openFolder(path: string, options: {forceReuseWindow: boolean}): Thenable<unknown>}` takes the workspace file path as a plain string. `reopenOffer.ts` must not import `vscode` (not even `Uri`): `reopenOffer.test.ts` loads it under vitest, which has no `vscode` module, and the spec keeps the `vscode` API in `extension.ts` and the environment objects it passes in.
+  - In `extension.ts`, `env.openFolder` is `(path, options) => vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(path), options)`. The `Uri` is built there.
 - `extension.ts`. Let the window be generated when `workspaceFile?.scheme === 'file'` and `isGeneratedWorkspace(fsPath)`.
   - Generated window:
     - `onCount` calls `setWorkspaceTitle(path, tabTitle(count, basename(folder)))`, with the folder taken from the file's single folder.
@@ -59,12 +60,6 @@ None match.
 
 ## Verification
 
-- New `extension/src/reopenOffer.test.ts` covers the `shouldOffer` matrix (multi-root, workspace file present, already offered, no folders) and that `reopenAsWorkspace` writes the file before calling `openFolder` with `forceReuseWindow`.
-- Run `yarn test`, `yarn build-tsc`, `yarn lint` and `yarn package-extension`.
-- Manual check, because no test covers VS Code's handling of the generated file. Install the VSIX in VS Code, open a scratch folder whose `.vscode/settings.json` sets a window-scoped setting such as `"window.titleSeparator"`, and accept the offer. Then confirm:
-  - the window reopens from `<data>/workspaces/...`
-  - the tab reads `○ <folder>`
-  - a fake `status/<id>.json` with a `Stop` payload, whose `cwd` is the folder and whose session is in `~/.claude/sessions`, turns it into `● <folder>` while the window is unfocused, and focusing clears it
-  - whether the window-scoped setting applies only after the copy, which confirms the spec's unverified claim. Record the result in the README.
-
-  Close the window and remove the scratch folder and any generated files afterwards.
+- New `extension/src/reopenOffer.test.ts` covers the `shouldOffer` matrix (multi-root, workspace file present, already offered, no folders) and that `reopenAsWorkspace` writes the file (in a temp dir) before calling a fake `openFolder` with the written file's path string and `{forceReuseWindow: true}`.
+- Run `yarn test`, `yarn build-tsc`, `yarn lint` and `yarn build-extension`. Do not run `yarn package-extension`: it writes over the owner's `extension/aydy-companion-0.1.0.vsix`.
+- No real-environment check in this task. Installing the VSIX in the owner's VS Code would make the extension rewrite the real `~/.claude/settings.json` and write real seen and window files, which no implementer step may do (spec, "Verification boundary"). VS Code's handling of the generated file (the reopen, the `○`/`●` title, and whether a window-scoped `.vscode/settings.json` setting applies only through the copy) is checked by the owner at acceptance. In the README, state the window-scoped settings behaviour as unverified rather than as fact.

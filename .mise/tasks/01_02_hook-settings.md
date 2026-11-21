@@ -70,7 +70,7 @@ None match.
 
 ## Verification
 
-- New `extension/src/hookSettings.test.ts`. Use a fixture that copies the real settings shape from `REAL_SETTINGS` at `src-tauri/src/hooks/mod.rs:94` (with `afplay` hooks plus an `X-Aydy-Hook` http hook) and check:
+- New `extension/src/hookSettings.test.ts`. Use a fixture that copies the real settings shape from `REAL_SETTINGS` at `src-tauri/src/hooks/mod.rs:94-178`. That constant holds only `afplay` command hooks, so the fixture must also add, by hand, a legacy AYDY http entry to at least one event, for example `{ "hooks": [ { "type": "http", "url": "http://127.0.0.1:47823/hook", "headers": { "X-Aydy-Hook": "1" } } ] }` under `Stop` (the shape `is_aydy_hook` at `src-tauri/src/hooks/merge.rs:468-482` recognises). Every check below asserts that both the `afplay` hooks and that legacy entry come through untouched, since the app's legacy entries stay until stage 3. Check:
   - add to an empty doc
   - add alongside the user's hooks with them untouched
   - a no-op when present
