@@ -34,15 +34,11 @@ use crate::extension::registry::ExtensionRegistry;
 use crate::hooks::install::{follow_port_moves, HookInstaller, HookRegistry};
 use crate::hooks::settings_file::SettingsFile;
 use crate::hooks::stash::HookStash;
-use crate::ipc::commands::{
-    close_popover, extension_status, hook_status, install_hooks, jump_to_session, mark_read,
-    preview_hook_install, quit, reinstall_hooks, reveal_settings_file, tracking_status,
-    uninstall_hooks,
-};
+use crate::ipc::commands::{close_popover, jump_to_session, mark_read, quit, tracking_status};
 use crate::ipc::snapshot_channel::{subscribe_sessions, PublisherShutdown, SessionSubscription};
 use crate::jump::{CodeCli, JumpRequests, Jumper, WindowRaiser};
 use crate::listener::port::{PortMemory, PortState};
-use crate::listener::server::{ListenerHealth, ListenerShutdown};
+use crate::listener::server::ListenerShutdown;
 use crate::notify::sound::{SoundNotifier, SystemSoundPlayer};
 use crate::port_file::{publish_port, PortFile, PORT_FILE};
 use crate::session::registry::SessionRegistry;
@@ -109,13 +105,6 @@ pub fn run() {
             jump_to_session,
             close_popover,
             quit,
-            hook_status,
-            preview_hook_install,
-            install_hooks,
-            reinstall_hooks,
-            uninstall_hooks,
-            reveal_settings_file,
-            extension_status,
             tracking_status,
             read_settings,
             update_settings
@@ -135,7 +124,6 @@ pub fn run() {
                 HookStash::new(config.join(REMOVED_HOOKS_FILE)),
                 Arc::new(HookRegistry::new()),
             ));
-            let health = Arc::new(ListenerHealth::new(Arc::clone(&ports), hooks.registry()));
             // One VS Code window, one registration, keyed by the extension
             // host PID it reports — the only identifier a window has.
             let windows = Arc::new(ExtensionRegistry::new(Arc::new(SystemClock)));
@@ -178,7 +166,6 @@ pub fn run() {
             app.manage(Arc::clone(&registry));
             app.manage(data.clone());
             app.manage(Arc::clone(&ports));
-            app.manage(Arc::clone(&health));
             app.manage(Arc::clone(&hooks));
             app.manage(Arc::clone(&windows));
             app.manage(jumper);
@@ -220,9 +207,6 @@ pub fn run() {
             tauri::async_runtime::spawn(ipc::snapshot_channel::run(
                 app.handle().clone(),
                 Arc::clone(&registry),
-                health,
-                Arc::clone(&ports),
-                Arc::clone(&windows),
                 subscription,
                 sounds,
                 publish_shutdown,

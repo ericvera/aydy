@@ -10,11 +10,9 @@ use crate::session::status::SessionStatus;
 ///
 /// The icons are macOS template images: black plus alpha, tinted by the system
 /// for whichever menu bar they land in. Colour therefore carries nothing, and
-/// the five states are told apart by shape alone.
+/// the four states are told apart by shape alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IconState {
-    /// Hooks are registered but their events are going nowhere.
-    NotReceiving,
     /// At least one unread session is waiting on the user.
     NeedsInput,
     /// At least one unread session in any other status — the state the app is
@@ -30,7 +28,6 @@ impl IconState {
     /// The template image for this state.
     pub fn image(self) -> &'static [u8] {
         match self {
-            Self::NotReceiving => include_bytes!("../../icons/tray/not-receiving.png"),
             Self::NeedsInput => include_bytes!("../../icons/tray/needs-input.png"),
             Self::SomethingNew => include_bytes!("../../icons/tray/something-new.png"),
             Self::Working => include_bytes!("../../icons/tray/working.png"),
@@ -43,24 +40,17 @@ impl IconState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IconIndication {
     pub state: IconState,
-    /// The number beside the icon. States 1 and 5 carry none.
+    /// The number beside the icon. The quiet state carries none.
     pub count: Option<usize>,
 }
 
 /// The most urgent state present, with its count.
 ///
-/// Precedence: cannot receive events, then an unread session that needs input,
-/// then an unread session in any other status, then a working session, then
-/// nothing. A session that has been read never raises the icon above the
-/// working state, which is what makes the icon drop once the user has looked.
-pub fn indication(snapshot: &RegistrySnapshot, cannot_receive_events: bool) -> IconIndication {
-    if cannot_receive_events {
-        return IconIndication {
-            state: IconState::NotReceiving,
-            count: None,
-        };
-    }
-
+/// Precedence: an unread session that needs input, then an unread session in
+/// any other status, then a working session, then nothing. A session that has
+/// been read never raises the icon above the working state, which is what makes
+/// the icon drop once the user has looked.
+pub fn indication(snapshot: &RegistrySnapshot) -> IconIndication {
     if snapshot.unread_count > 0 {
         let waiting = sessions(snapshot)
             .any(|session| session.unread && session.status == SessionStatus::NeedsInput);
@@ -140,23 +130,9 @@ mod tests {
 
     #[test]
     fn an_empty_registry_leaves_the_menu_bar_quiet() {
-        let indication = indication(&snapshot(vec![]), false);
+        let indication = indication(&snapshot(vec![]));
 
         assert_eq!(indication.state, IconState::Quiet);
-        assert_eq!(indication.count, None);
-    }
-
-    #[test]
-    fn not_being_able_to_receive_events_outranks_every_other_state() {
-        let sessions = vec![
-            session("a", SessionStatus::NeedsInput, true),
-            session("b", SessionStatus::Done, true),
-            session("c", SessionStatus::Working, false),
-        ];
-
-        let indication = indication(&snapshot(sessions), true);
-
-        assert_eq!(indication.state, IconState::NotReceiving);
         assert_eq!(indication.count, None);
     }
 
@@ -167,7 +143,7 @@ mod tests {
             session("b", SessionStatus::NeedsInput, true),
         ];
 
-        let indication = indication(&snapshot(sessions), false);
+        let indication = indication(&snapshot(sessions));
 
         assert_eq!(indication.state, IconState::NeedsInput);
     }
@@ -179,17 +155,14 @@ mod tests {
             session("b", SessionStatus::Working, false),
         ];
 
-        let indication = indication(&snapshot(sessions), false);
+        let indication = indication(&snapshot(sessions));
 
         assert_eq!(indication.state, IconState::SomethingNew);
     }
 
     #[test]
     fn an_unread_session_that_is_still_unknown_is_something_new() {
-        let indication = indication(
-            &snapshot(vec![session("a", SessionStatus::Unknown, true)]),
-            false,
-        );
+        let indication = indication(&snapshot(vec![session("a", SessionStatus::Unknown, true)]));
 
         assert_eq!(indication.state, IconState::SomethingNew);
     }
@@ -201,7 +174,7 @@ mod tests {
             session("b", SessionStatus::Working, false),
         ];
 
-        let indication = indication(&snapshot(sessions), false);
+        let indication = indication(&snapshot(sessions));
 
         assert_eq!(indication.state, IconState::Working);
     }
@@ -213,7 +186,7 @@ mod tests {
             session("b", SessionStatus::Done, true),
         ];
 
-        let indication = indication(&snapshot(sessions), false);
+        let indication = indication(&snapshot(sessions));
 
         assert_eq!(indication.state, IconState::SomethingNew);
         assert_eq!(indication.count, Some(1));
@@ -221,10 +194,11 @@ mod tests {
 
     #[test]
     fn a_read_session_that_needs_input_alone_leaves_the_menu_bar_quiet() {
-        let indication = indication(
-            &snapshot(vec![session("a", SessionStatus::NeedsInput, false)]),
+        let indication = indication(&snapshot(vec![session(
+            "a",
+            SessionStatus::NeedsInput,
             false,
-        );
+        )]));
 
         assert_eq!(indication.state, IconState::Quiet);
         assert_eq!(indication.count, None);
@@ -239,7 +213,7 @@ mod tests {
             session("d", SessionStatus::Done, false),
         ];
 
-        let indication = indication(&snapshot(sessions), false);
+        let indication = indication(&snapshot(sessions));
 
         assert_eq!(indication.state, IconState::NeedsInput);
         assert_eq!(indication.count, Some(3));
@@ -253,7 +227,7 @@ mod tests {
             session("c", SessionStatus::Working, false),
         ];
 
-        let indication = indication(&snapshot(sessions), false);
+        let indication = indication(&snapshot(sessions));
 
         assert_eq!(indication.state, IconState::SomethingNew);
         assert_eq!(indication.count, Some(2));
@@ -268,7 +242,7 @@ mod tests {
             session("d", SessionStatus::NeedsInput, false),
         ];
 
-        let indication = indication(&snapshot(sessions), false);
+        let indication = indication(&snapshot(sessions));
 
         assert_eq!(indication.state, IconState::Working);
         assert_eq!(indication.count, Some(2));
@@ -295,7 +269,7 @@ mod tests {
             ],
         };
 
-        let indication = indication(&snapshot, false);
+        let indication = indication(&snapshot);
 
         assert_eq!(indication.state, IconState::Working);
         assert_eq!(indication.count, Some(2));
@@ -322,7 +296,7 @@ mod tests {
             ],
         };
 
-        let indication = indication(&snapshot, false);
+        let indication = indication(&snapshot);
 
         assert_eq!(indication.state, IconState::NeedsInput);
         assert_eq!(indication.count, Some(1));
@@ -331,7 +305,6 @@ mod tests {
     #[test]
     fn every_state_has_a_template_image_of_its_own() {
         let states = [
-            IconState::NotReceiving,
             IconState::NeedsInput,
             IconState::SomethingNew,
             IconState::Working,
@@ -356,7 +329,7 @@ mod tests {
         }
     }
 
-    /// The five states carry five distinct images, so a pair of them swapped
+    /// The four states carry four distinct images, so a pair of them swapped
     /// stays green everywhere except here — and a swap of needs-input and
     /// working would show "still running" while a session is blocked on the
     /// user, which is the one mistake the icon must never make. Each arm is
@@ -365,7 +338,6 @@ mod tests {
     #[test]
     fn every_state_shows_the_icon_named_after_it() {
         let named = [
-            (IconState::NotReceiving, "not-receiving.png"),
             (IconState::NeedsInput, "needs-input.png"),
             (IconState::SomethingNew, "something-new.png"),
             (IconState::Working, "working.png"),
