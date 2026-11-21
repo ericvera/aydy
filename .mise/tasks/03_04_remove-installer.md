@@ -52,7 +52,7 @@ None match.
   - Delete the rest and its tests.
   - Drop the listener imports.
   - Rewrite the module doc: it recognises the entries older app versions installed.
-- `legacy.rs`: `fn resolved(settings: &SettingsFile) -> Option<SettingsFile>`. When `fs::symlink_metadata(settings.path())` says the path is a symlink, return `SettingsFile::new(fs::canonicalize(path)?)` (the real file, following chains of links); `None` when canonicalize fails (a dangling link: there is nothing to clean). Otherwise return a `SettingsFile` for the same path. This keeps the fix inside `legacy.rs`, so `settings_file.rs` is not touched.
+- `legacy.rs`: `fn resolved(settings: &SettingsFile) -> Option<SettingsFile>`. When `fs::symlink_metadata(settings.path())` says the path is a symlink, return `SettingsFile::new(fs::canonicalize(path)?)` (the real file, following chains of links); `None` when canonicalize fails. That is a dangling link, which the spec ("Shared files") treats as its missing target in both settings writers: the extension's install creates the target, and this cleanup treats it as a missing file, so there is nothing to clean and it creates nothing. Otherwise return a `SettingsFile` for the same path. This keeps the fix inside `legacy.rs`, so `settings_file.rs` is not touched.
 - `legacy.rs`: `pub fn remove_legacy_hooks(settings: &SettingsFile) -> Result<usize, HookError>`.
   0. Resolve the target with `resolved`; `None` returns 0. Every step below reads and writes the resolved file, so the rename lands on the real path and the link survives. `atomic_file::write_atomically` carries the real file's permissions over (`atomic_file.rs:57-59`).
   1. Read the file. A missing file returns 0.

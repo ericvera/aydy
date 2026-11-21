@@ -13,7 +13,9 @@ Every VS Code window watches AYDY's jump directory. Only the one window that own
 
 - Task 02_05 made the app write `<data>/jump/<id>.json` containing `{"id","sessionId","cwd","tabLabel": string|null,"requestedAt": ms}`. The app then polls for up to 3 s (plus a 1 s grace period after a late claim) for `<data>/jump/<id>.reply.json` containing `{"open": "<abs path>", "reveal": RevealOutcome}`. It runs `code <open>` and deletes the reply.
 - `<data>` paths come from `jumpDir()` in `extension/src/aydyPaths.ts` (task 01_01). Atomic writes come from `writeAtomically` in `extension/src/atomicWrite.ts` (task 01_02).
-- Ownership (`.mise/spec.md`, "What" and "Jump"): a session belongs to exactly one window, the open window with the longest folder containing its `cwd`, ties to the lowest pid.
+- Ownership (`.mise/spec.md`, "What" and "Jump"): a session belongs to exactly one window, the open window with the longest folder containing its session directory, ties to the lowest pid.
+- Session directory (`.mise/spec.md`, "Session directory"): the launch directory from the session's live `~/.claude/sessions/<pid>.json`, falling back to the request's `cwd`, then realpath'd (raw value on failure), because window folders are realpaths. 02_05 already puts the launch directory in the request's `cwd`; the responder looks it up again so a request from an older app, which carries the moving payload `cwd`, is still claimed by the right window.
+  - `readLiveSessions()` (live session id to launch `cwd`, or `null` when unreadable) and `resolveCwd(cwd)` in `extension/src/sessionStore.ts` (task 01_04).
   - `ownerOf(cwd, windows)` and `containingFolderLength(cwd, folders)` in `extension/src/sessionState.ts` (task 01_04).
   - `knownWindows(selfPid, selfFolders)` in `extension/src/windowRegistry.ts` (task 01_04) returns every live published window plus this one from memory.
   - `extension.ts` keeps a realpath'd folder list and publishes it under `process.pid` (task 01_05).
@@ -30,13 +32,13 @@ None match.
 
 - `jumpRequests.ts`:
   - `parseJumpRequest(text): JumpRequest | null` is strict on types and validates `id` against `^[A-Za-z0-9_.-]{1,128}$`.
-  - `shouldHandle(request, selfPid, windows: WindowFolders[], now)` is `ownerOf(request.cwd, windows) === selfPid && now - request.requestedAt <= 10_000`.
-  - `class JumpResponder` takes options `{dir, pid: number, folders: () => string[], windows: () => Promise<WindowFolders[]>, open: () => string | null, reveal: (r: RevealRequest) => Promise<RevealOutcome>, pollMs = 1000}`. `windows` defaults to `() => knownWindows(pid, folders())`.
+  - `shouldHandle(request, selfPid, windows: WindowFolders[], now)` is `ownerOf(request.cwd, windows) === selfPid && now - request.requestedAt <= 10_000`. It is pure, and it is always called with `request.cwd` already replaced by the resolved session directory.
+  - `class JumpResponder` takes options `{dir, pid: number, folders: () => string[], windows: () => Promise<WindowFolders[]>, launchCwds: () => Promise<ReadonlyMap<string, string | null> | null>, resolveCwd: (cwd: string | null) => Promise<string | null>, open: () => string | null, reveal: (r: RevealRequest) => Promise<RevealOutcome>, pollMs = 1000}`. `windows` defaults to `() => knownWindows(pid, folders())`, `launchCwds` to `readLiveSessions` and `resolveCwd` to `resolveCwd` from `sessionStore.ts`. `dir` has no default in the class; only `extension.ts` passes `jumpDir()`.
     - `start()`: `mkdir -p`, then `fs.watch` plus polling.
-    - A scan reads the known windows once, then every `*.json` that does not end in `.reply.json`. For each request it should handle:
+    - A scan reads the known windows and `launchCwds()` once, then every `*.json` that does not end in `.reply.json`. For each request it computes `cwd = await resolveCwd(launch?.get(request.sessionId) ?? request.cwd)` and calls `shouldHandle({...request, cwd}, ...)`. For each request it should handle:
       1. Claim it with `fs.promises.unlink`. `ENOENT` means skip.
       2. Run `reveal({sessionId, tabLabel})` when `tabLabel !== null`, otherwise use `'notPresent'`.
-      3. Write `<id>.reply.json` atomically with `{open: open() ?? owningFolder, reveal}`, where `owningFolder` is this window's longest folder containing `cwd`.
+      3. Write `<id>.reply.json` atomically with `{open: open() ?? owningFolder, reveal}`, where `owningFolder` is this window's longest folder containing the resolved `cwd`.
     - It handles each id at most once and never overlaps scans.
 - `extension.ts`: create the responder with:
   - `pid`: `process.pid`
@@ -58,6 +60,8 @@ None match.
 - New `extension/src/jumpRequests.test.ts` uses temp dirs and fake timers. It covers:
   - Parse rejects bad shapes and ids.
   - `shouldHandle` checks ownership and age.
+  - Moved session: windows pid 1 at `/a` and pid 2 at `/a/.claude/worktrees/x`; a request whose `cwd` is inside the worktree but whose session's launch `cwd` (injected `launchCwds`) is `/a` is claimed and answered by pid 1 only, with `open` falling back to `/a`. With `launchCwds` returning `null` or no entry, the request's `cwd` decides.
+  - Resolution: the injected `resolveCwd` runs before ownership (a fake mapping `/link/src` to `/a/src` makes pid 1 claim it), and with the real `resolveCwd` a request `cwd` under a symlinked temp folder is claimed by the window holding the folder's realpath.
   - Nested windows: with windows `{pid: 1, folders: ['/a']}` and `{pid: 2, folders: ['/a/.claude/worktrees/x']}`, a request whose `cwd` is inside the worktree is handled by pid 2 and not by pid 1; a request with `cwd` `/a/src` is handled by pid 1.
   - Two responders (pids 1 and 2 as above) sharing one jump dir: for the worktree session only pid 2 calls `reveal` and replies, and pid 1 leaves the request untouched.
   - The responder claims an owned request, calls `reveal` with the label, and writes a reply with `open`.

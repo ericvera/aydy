@@ -32,6 +32,7 @@ The snapshot sent to the popover stops carrying listener health, port moves, the
 - `listener/server.rs`: `ListenerHealth` (`:278-300`) stays defined in this task. The tests of `hooks/install.rs` (`:511`, `:1077-1112`) construct it, and that file is deleted in 03_04, which deletes `ListenerHealth` with it. `HookRegistration` and `RegisteredHooks` (`:261-276`) stay too, because `hooks/install.rs:153` still implements them.
 - The `ipc/commands.rs` test module imports installer types used only by the hook command tests: `crate::hooks::install::{AddedHook, HookRegistry}` (`:469`), `crate::hooks::stash::HookStash` (`:471`), `crate::hooks::settings_file::SettingsFile` and `crate::hooks::test_support::{scratch_dir, REAL_SETTINGS, SETTINGS_WITHOUT_HOOKS}`, with helpers such as `const PORT` and the scratch installer and `health_bound_to` (`:496-503`). `hooks/install.rs` and `hooks/stash.rs` are deleted in 03_04.
 - `lock_recovering` now lives in `src-tauri/src/sync.rs` (task 02_01).
+- The `ipc/commands.rs` test module still imports `use crate::extension::registry::Registration;` (02_05 narrowed it to that and kept it). Its only users are the helper `fn window(pid: u32) -> Registration` (at `:954` before stage 2) and the `extension_status` tests that follow it (`the_extension_reads_as_not_connected_until_a_window_registers` and the ones after it, which call `connection_payload` with an `ExtensionRegistry`).
 
 ## Guides
 
@@ -46,7 +47,7 @@ None match.
   - `indication(snapshot)` loses its flag.
   - Import `lock_recovering` from `crate::sync`.
 - `tray/icon.rs`: remove `NotReceiving` and its asset include, simplify `indication`, and update the tests and doc comments.
-- `commands.rs`: delete the seven commands and their payloads and helpers, and the imports of `hooks::install`, `hooks::merge::HookKind`, `ListenerHealth`, `PortState` and `ExtensionRegistry`. In the test module, delete the tests for those commands together with every helper, constant and import only they used (the installer and stash imports above, `PORT`, the scratch installer, `health_bound_to`). Keep whatever the remaining tests (mark read, jump, popover) use.
+- `commands.rs`: delete the seven commands and their payloads and helpers, and the imports of `hooks::install`, `hooks::merge::HookKind`, `ListenerHealth`, `PortState` and `ExtensionRegistry`. In the test module, delete the tests for those commands together with every helper, constant and import only they used (the installer and stash imports above, `PORT`, the scratch installer, `health_bound_to`, and for `extension_status` the `window` helper, its tests and the `Registration` import). Keep whatever the remaining tests (mark read, jump, popover) use.
 - `lib.rs`:
   - Remove those seven from `generate_handler!`.
   - Stop creating and managing `ListenerHealth`.
@@ -64,5 +65,5 @@ None match.
 - Update the tests:
   - `snapshot_channel.rs` payload tests assert the camelCase payload has no `portMove`, `stale`, `extensionConnected` or `isCurrent`.
   - `icon.rs` indication tests.
-  - Remove the `commands.rs` tests for the deleted commands. Grep the `commands.rs` test module for `hooks::install`, `hooks::stash`, `HookInstaller` and `ListenerHealth`; none may remain.
+  - Remove the `commands.rs` tests for the deleted commands. Grep the `commands.rs` test module for `hooks::install`, `hooks::stash`, `HookInstaller`, `ListenerHealth`, `Registration`, `ExtensionRegistry` and `extension::`; none may remain.
 - Run `cargo test` and `cargo clippy` from `src-tauri/`, and `yarn test`.

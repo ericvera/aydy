@@ -26,6 +26,7 @@ Clicking a session row asks VS Code windows to reveal it by writing a request fi
   - Request `<id>.json`: `{"id","sessionId","cwd","tabLabel": string|null,"requestedAt": ms}`.
   - Reply `<id>.reply.json`: `{"open": "<abs path>", "reveal": "revealed"|"notPresent"|"unexpectedVersion"|"duplicated"|"failed"}`.
 - The extension claims a request by unlinking it. Task 02_06 does the extension side.
+- The request's `cwd` is the session's **launch** directory (`.mise/spec.md`, "Session directory"). `JumpTarget::of` takes `session.cwd`, which the registry overwrites from every hook event (`session/registry.rs:208-209`) and so follows the session when it changes directory, for example from window `/a` into `/a/.claude/worktrees/x`. The extension would then let the worktree window claim a session whose tab lives in the `/a` window. The launch directory is the `cwd` field of the session's live `~/.claude/sessions/<pid>.json` (`REAL_SESSION_FILE`, `discovery/mod.rs:48-60`), read with `discovery::session_files::read_all` (`session_files.rs:71`), with liveness from `ProcessTable` (`session_files.rs:139`; `LiveProcesses` in production, `FixedProcesses` in tests). The sessions dir is `discovery::reconciler::user_sessions_dir()` (`reconciler.rs:59`). Test helpers: `discovery::test_support::{sessions_dir, REAL_SESSION_FILE}` (`discovery/mod.rs`).
 - `jump_to_session` and `jump_target`: `ipc/commands.rs:199-238`.
 - Imports in `jump/mod.rs` that must all go, because `listener/` and `extension/` are deleted in 03_05 and `WindowFocus` in 03_07:
   - `:32` `crate::extension::command::{ExtensionCommands, RevealOutcome}`
@@ -35,6 +36,7 @@ Clicking a session row asks VS Code windows to reveal it by writing a request fi
   - the test module's `crate::extension::command::ExtensionChannel` and `crate::extension::registry::ExtensionRegistry` (`:639-640`)
 - `jump/mod.rs:1444`: the test `a_session_that_cannot_be_jumped_to_has_nothing_to_jump_to` sets `session.window = Some(65_921);`. `Session.window` is deleted in 03_06, whose files do not include `jump/mod.rs`, so this task removes the line.
 - `ipc/commands.rs` test module (`:458-480`) builds its `jumpable_session` fixture (`:801-831`) by placing the session in a window: it imports `crate::discovery::process_tree::FixedParents` (`:465`), `crate::discovery::window_map::associate` (`:467`) and `crate::extension::registry::{ExtensionPid, Registration}` (`:468`), defines `const WINDOW: ExtensionPid` (`:798`), and calls `registry.apply_window_map(&associate(...))` (`:819-828`). `apply_window_map`, `window_map.rs` and `process_tree.rs` are deleted in 03_06, and `extension/` in 03_05, so this fixture must stop using them here.
+- `Registration` is **not** only the fixture's: the helper `fn window(pid: u32) -> Registration` (`ipc/commands.rs:954`) and the `extension_status` tests after it still use it. They are deleted in 03_03, which also drops the import. This task keeps it.
 
 ## Guides
 
@@ -44,6 +46,7 @@ None match.
 
 - `JumpOutcome` becomes `Jumped | NoWindow | Unanswered | Duplicated`, serialized camelCase as today. Update the doc comments.
 - Remove `window` from `JumpTarget`. Delete `IdeLocks`, `WindowFolders` and `JumpWatch`, and every use of `ExtensionCommands`.
+- Add `pub fn with_launch_cwd(self, sessions_dir: Option<&Path>, processes: &dyn ProcessTable) -> Self` to `JumpTarget`. When `sessions_dir` is `Some` and `session_files::read_all` succeeds, it looks for a file whose `session_id` equals the target's, whose `pid` `processes.is_alive`, and whose `cwd` is `Some`, and replaces `self.cwd` with that `cwd`. In every other case (no dir, unreadable dir, no matching live file, a file without `cwd`) it returns the target unchanged, so the registry's `session.cwd` is the fallback. Doc it with the reason above.
 - `Jumper::new(raiser: Arc<dyn WindowRaiser>, requests: JumpRequests)`, where `JumpRequests` is a small struct holding the dir, a timeout (3 s), a grace period (1 s) and a poll interval (50 ms). Tests use short values.
 - `Jumper::jump(target)`:
   1. If `!raiser.available()` or `target.cwd` is None, return `NoWindow`.
@@ -61,7 +64,8 @@ None match.
 - `server.rs` and `routes.rs`: remove `jumps` from `ListenerState` and the `confirm` call at `routes.rs:329`.
 - `commands.rs`:
   - `jump_target` no longer reads `session.window`. (Task 02_03 already switched `lock_recovering` to `crate::sync`.)
-  - In the test module, remove the window placement from `jumpable_session`: delete the `apply_window_map(&associate(...))` call, `const WINDOW`, and the `FixedParents`, `associate`, `ExtensionPid` and `Registration` imports (keep `SessionFile` only if something else uses it). Update the fixture's doc comment: the session is found by the scan and titled by the transcript pass, and no window placement is needed for a jump any more.
+  - `jump_to_session`: inside the `spawn_blocking` closure, before `jumper.jump`, set `let target = target.with_launch_cwd(user_sessions_dir().as_deref(), &LiveProcesses);`. It reads files, so it runs on the blocking thread and never while the registry lock is held. The `unwrap_or` fallback becomes `JumpOutcome::Unanswered`, since `Unconfirmed` is gone.
+  - In the test module, remove the window placement from `jumpable_session`: delete the `apply_window_map(&associate(...))` call, `const WINDOW`, and the `FixedParents`, `associate` and `ExtensionPid` imports (keep `SessionFile` only if something else uses it). Narrow `:468` to `use crate::extension::registry::Registration;` and keep it: the `window` helper (`:954`) and the `extension_status` tests still need it until 03_03. Update the fixture's doc comment: the session is found by the scan and titled by the transcript pass, and no window placement is needed for a jump any more.
 
 ## Gotchas
 
@@ -79,7 +83,10 @@ None match.
   - a late claim (request unlinked, reply written within the grace period) gives `Jumped`
   - no `code` CLI gives `NoWindow` and writes nothing
   - a malformed reply gives `Unanswered`
+- `with_launch_cwd` tests in `jump/mod.rs`, using a scratch sessions dir from `discovery::test_support::sessions_dir` and `FixedProcesses`:
+  - a target whose `cwd` is `/a/.claude/worktrees/x`, with a live session file for its id whose `cwd` is `/a`, comes out with `cwd` `/a`
+  - a matching file whose pid is dead, a file for another session id, a file without `cwd`, a `None` dir and a missing dir all leave `cwd` unchanged
 - Keep the `JumpTarget::of` tests, minus `window`. In `a_session_that_cannot_be_jumped_to_has_nothing_to_jump_to`, delete the `session.window = Some(65_921);` line and keep the test: `jumpable = false` alone gives `None`.
 - The `commands.rs` jump tests that use `jumpable_session` still pass without the window placement.
-- Grep `jump/mod.rs` and the `commands.rs` test module for `extension::`, `listener::`, `ExtensionPid`, `WindowId`, `WindowFocus`, `FixedParents`, `window_map`, `apply_window_map`, and the field access `.window` (`grep -nE '\.window\b'`, so `.windows` and `.window_count` do not count). None may remain.
+- Grep `jump/mod.rs` and the `commands.rs` test module for `extension::`, `listener::`, `ExtensionPid`, `WindowId`, `WindowFocus`, `FixedParents`, `window_map`, `apply_window_map`, and the field access `.window` (`grep -nE '\.window\b'`, so `.windows` and `.window_count` do not count). None may remain, except the one line `use crate::extension::registry::Registration;` in the `commands.rs` test module, which 03_03 removes.
 - Run `cargo test` and `cargo clippy` from `src-tauri/`.

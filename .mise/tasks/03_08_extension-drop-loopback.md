@@ -28,6 +28,7 @@ The VS Code extension stops trying to register with the AYDY app over loopback H
   - `JumpResponder` (02_06)
 - `revealSession.ts:1-29` doc says "AYDY only ever addresses the window its process-tree join placed the session in, and the window checks that the command was addressed to it". That is now false. Only the window that owns the session by the most-specific-folder rule (`ownerOf` in `sessionState.ts`, over the windows published in `<data>/windows/`) claims the jump request, by unlinking it.
 - `package.json` description: "Tells AYDY which Claude Code sessions belong to this VS Code window".
+- The doc comment on `CLAUDE_CODE_EXTENSION` (`extension/src/extension.ts:10-16`) says the version "is reported to AYDY". After this task nothing reports it; the constant only feeds `claudeCodeVersion`, which `revealEnvironment` uses for the reveal's version check (`revealSession.ts`).
 
 ## Guides
 
@@ -39,6 +40,7 @@ None match.
   - Remove the client, the reporter and their helpers and subscriptions.
   - `deactivate` keeps only the `unpublishWindow(process.pid)` call from 01_05.
   - Keep `revealEnvironment` and `isClaudeTab`, because the jump responder uses them.
+  - Rewrite the `CLAUDE_CODE_EXTENSION` doc comment: Claude Code exports no API, so nothing calls it; its version is read only so the reveal can refuse to drive a Claude Code version this integration has not been checked against. Drop the sentence about reporting the version to AYDY.
 - `revealSession.ts`: add `versionOf` and rewrite the guard bullets in the header doc for the request-file path.
 - `package.json` description: "Tracks Claude Code sessions for AYDY and shows how many need you in each window's tab".
 - `README.md`:
@@ -55,7 +57,7 @@ None match.
   - Also keep the `WindowTracker` itself, its `onCount` (which writes the title through `setWorkspaceTitle`, 01_07), the `.vscode/settings.json` watcher, the reopen offer and command, `installTracking` and the `JumpResponder`.
 
   Remove only the client and reporter parts: `started.update(windowFacts())` from the folder handler, `reportFocus` from the window-state subscription (keep the subscription if it still pokes the tracker), the `onDidChangeTabs`/`onDidChangeTabGroups` subscriptions that only call `reportFocus`, and the disposable that calls `focus.dispose()` and `started.close()`. Read the file as it is after 01_05, 01_07 and 02_06 before editing; the line numbers above are from before stage 1.
-- Grep `extension/src` for `aydyClient`, `focusReporter`, `listener.json` and `aydyPortFilePath` afterwards.
+- Grep `extension/src` for `aydyClient`, `focusReporter`, `listener.json` and `aydyPortFilePath` afterwards, and `extension/src/extension.ts` for `reported to AYDY`; none may remain.
 
 ## Verification
 

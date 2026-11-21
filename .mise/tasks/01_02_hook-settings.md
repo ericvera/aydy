@@ -41,19 +41,21 @@ None match.
 
 `atomicWrite.ts`:
 
-- `resolveTarget(path)`: `lstat` the path. When it is a symlink, return `fs.realpath(path)`; when the link dangles (`ENOENT` from realpath), return `path.resolve(dirname(path), readlink(path))`. Otherwise (including a missing path) return `path` unchanged.
+- `resolveTarget(path)`: `lstat` the path. When it is a symlink, return `fs.realpath(path)`. When the link dangles (`ENOENT` from realpath), follow it one hop at a time (`path.resolve(dirname(p), readlink(p))`) until the path is missing or not a link, and return that path, the missing target. Give up after 32 hops with an error (callers map it to `unwritable`). Otherwise (including a missing path) return `path` unchanged.
+- Dangling symlinks (spec, "Shared files"): a dangling link is treated as its missing target. Install creates that target, and its parent directories, and the link stays a link that now resolves. The app's legacy cleanup (03_04) treats the same case as a missing file and writes nothing. Do not replace the link and do not skip.
 - `writeAtomically(path, text, mode?)`:
   1. Resolves the real target with `resolveTarget`, so a symlinked settings file (dotfiles managers) keeps its link and the real file is updated.
-  2. Writes to `<real dir>/.<real base>.<pid>.<random>.tmp` and fsyncs.
-  3. Sets the temp file's mode: `mode` when given; otherwise, when the real target exists, its current permission bits (`stat.mode & 0o7777`), mirroring `src-tauri/src/atomic_file.rs:57-59`; otherwise leaves the umask default.
-  4. Renames onto the real target, and cleans up the temp file on any failure.
-- `writeIfUnchanged(path, expected: string | null, text)` follows the same steps (resolved target, permissions carried over) and re-reads the real target just before the rename, throwing `ChangedOnDisk` if its content differs from `expected`. `null` means the file did not exist.
+  2. Creates the real target's parent directory with `fs.mkdir(dirname(real), {recursive: true})`, as `src-tauri/src/atomic_file.rs:32` does, so a machine without `~/.claude/` (or a dangling link into a missing directory) installs cleanly.
+  3. Writes to `<real dir>/.<real base>.<pid>.<random>.tmp` and fsyncs.
+  4. Sets the temp file's mode: `mode` when given; otherwise, when the real target exists, its current permission bits (`stat.mode & 0o7777`), mirroring `src-tauri/src/atomic_file.rs:57-59`; otherwise leaves the umask default.
+  5. Renames onto the real target, and cleans up the temp file on any failure.
+- `writeIfUnchanged(path, expected: string | null, text)` follows the same steps (resolved target, parent directory created, permissions carried over) and re-reads the real target just before the rename, throwing `ChangedOnDisk` if its content differs from `expected`. `null` means the file did not exist.
 
 `hookInstall.ts`:
 
 - `installHookScript(extensionPath, paths?)` reads `<extensionPath>/hook/aydy-hook.sh` and compares it with the installed copy. If they differ, it creates `binDir` recursively and writes the copy atomically with mode `0o755`. It returns whether it wrote.
 - `ensureHooks(paths?)` reads the settings file:
-  - A missing file is treated as `{}`. Parse failure returns `{ok:false, reason:'malformed'}`.
+  - A missing file is treated as `{}`, and so is a dangling symlink (reading it gives `ENOENT`). Parse failure returns `{ok:false, reason:'malformed'}`.
   - If `hasAllHooks` is true, it returns `{ok:true, changed:false}` without writing.
   - Otherwise it renders `withAydyHooks` with the detected indent (the first indented line's whitespace, default two spaces) and the trailing newline.
   - It writes with `writeIfUnchanged`. On `ChangedOnDisk` it retries the whole read-check-write once.
@@ -82,9 +84,12 @@ None match.
   - an existing 0600 target stays 0600 after `writeAtomically` and after `writeIfUnchanged` with no mode (set `process.umask(0o022)` for the test and restore it)
   - a symlinked target: after the write, the link is still a symlink (`lstat().isSymbolicLink()`), it points at the same real file, and the real file holds the new text with its permissions kept
   - a `ChangedOnDisk` abort that leaves the file intact
+  - a target whose parent directory does not exist (`<tmp>/a/b/settings.json`): `writeAtomically` and `writeIfUnchanged` with `expected: null` create the directories and the file
+  - a dangling symlink whose target is in a missing directory: after the write the link is still a symlink, its target and the target's directory now exist, and the target holds the text
   - no leftover temp files
 - New `extension/src/hookInstall.test.ts` runs against a temp HOME and checks:
   - script copied with mode 755, and rewritten only when the source differs
+  - `ensureHooks` on a temp HOME with no `.claude/` directory creates `.claude/settings.json` with the five entries
   - `ensureHooks` writes once, then reports `changed:false` with the file mtime untouched
   - malformed JSON is reported and the file is unchanged
   - two concurrent `ensureHooks` calls end with exactly one entry per event

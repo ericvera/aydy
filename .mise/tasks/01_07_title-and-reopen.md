@@ -14,6 +14,7 @@ Make the count visible. In a window opened from AYDY's generated workspace file,
 ## Background
 
 - Task 01_05 wired a `WindowTracker` into `extension/src/extension.ts`. Its `onCount` stores the count in a module variable.
+- Since 01_05, `extension.ts` keeps this window's folder list with only `file`-scheme workspace folders, realpath'd (remote windows are out of scope, spec "What"). Use that list for `shouldOffer`'s `folders`, so a remote window is never offered a reopen.
 - Task 01_04 produced `tabTitle(count, name)` in `extension/src/sessionState.ts`.
 - Task 01_06 produced, in `extension/src/workspaceFile.ts`: `generatedWorkspacePath`, `isGeneratedWorkspace`, `writeWorkspace(folder, title)`, `setWorkspaceTitle(path, title)` and `syncFolderSettings(path)`.
 - Owner decision 2: reopening happens only on the owner's click.

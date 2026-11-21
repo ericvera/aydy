@@ -50,13 +50,16 @@ None match.
      - **Try again** releases the notice and reruns.
   4. Catch everything. Activation must never throw.
 - `uninstall.ts`: a top-level script for Node with no `vscode` import. It calls `removeHooks()` and swallows errors.
-- `package.json`: add `"scripts": {"vscode:uninstall": "node ./out/uninstall.js"}`. VS Code runs this once the extension is fully uninstalled.
+- `package.json`:
+  - Add `"scripts": {"vscode:uninstall": "node ./out/uninstall.js"}`. VS Code runs this once the extension is fully uninstalled.
+  - Add `"extensionKind": ["ui"]`, so the extension always runs on the local machine. In a Remote-SSH, dev-container or WSL window it must never run on the remote host, where it would edit that host's `~/.claude/settings.json`. Remote sessions are out of scope (spec, "What").
 
 ## Gotchas
 
 - `vscode:uninstall` runs in plain Node, outside the extension host, and only after VS Code restarts. Any `vscode` import in its import graph crashes it, so keep `hookInstall.ts`, `hookSettings.ts` and `aydyPaths.ts` free of `vscode`.
 - The notice marker survives VS Code restarts. That is intended ("says so once"). Success in any window clears it.
 - Do not touch the legacy `X-Aydy-Hook` entries. The app still uses them in this stage.
+- `extensionKind` is a top-level manifest key next to `engines`, not inside `contributes`.
 
 ## Verification
 
@@ -65,4 +68,5 @@ None match.
   - release followed by a claim is true again
   - `failureMessage` copy for each reason
 - `uninstall.ts` stays a one-line call into `removeHooks`, which 01_02 tests. As a substitute check, run `node extension/out/uninstall.js` after `yarn build-extension` as `env -u CLAUDE_CONFIG_DIR HOME=<temp dir> node extension/out/uninstall.js`, where the temp dir holds `.claude/settings.json` with AYDY entries, and confirm they are removed. Unsetting `CLAUDE_CONFIG_DIR` keeps it from reaching the owner's real settings file (spec, "Verification boundary").
+- Confirm `node -e "const p=require('./extension/package.json'); if (JSON.stringify(p.extensionKind)!=='[\"ui\"]') process.exit(1)"` exits 0.
 - Run `yarn test`, `yarn build-tsc`, `yarn lint` and `yarn build-extension`.

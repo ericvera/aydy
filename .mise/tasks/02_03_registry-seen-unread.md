@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make the app's unread state come from the shared seen files rather than from VS Code focus reports. A session is unread when its last `Stop` or `Notification` is newer than its last seen time. Status records are applied at the time they were recorded, not at the time the app read them. Marking a row read in the popover writes the seen file, so the VS Code tab count agrees. Sounds stay quiet for sessions that are already seen, and stay quiet until the notifier is armed, so state loaded at startup never plays a sound.
+Make the app's unread state come from the shared seen files rather than from VS Code focus reports. A session is unread when its last event is `Stop` or `Notification` and that event is newer than its last seen time, the same rule the VS Code extension's `isUnread` uses. Status records are applied at the time they were recorded, not at the time the app read them. Marking a row read in the popover writes the seen file, so the VS Code tab count agrees. Sounds stay quiet for sessions that are already seen, and stay quiet until the notifier is armed, so state loaded at startup never plays a sound.
 
 ## Files to modify/create
 
@@ -22,6 +22,7 @@ Make the app's unread state come from the shared seen files rather than from VS 
   - It is cleared by `read_window` (`:407`), by `apply_focus_report` (`:475`) and by `mark_read` (`:533`).
   - `SessionSnapshot` (`:36`) carries `unread`, and `RegistrySnapshot.unread_count` is derived from it.
 - Time today: `apply_hook_event` stamps every event with `self.clock.now()` (`:187`), a monotonic `Instant`. The snapshot sorts by `last_event_at` (`:597`) and working time is measured from those instants. Task 02_04 replays every live status file on its first pass, so stamping records with `now` would sort yesterday's `Stop` as brand new and count a `UserPromptSubmit`'s working time from app launch.
+- The single unread rule (`.mise/spec.md`, "What"), identical in the extension (`isUnread` in `extension/src/sessionState.ts`, task 01_04) and the app: a session is unread when its **last** event is `Stop` or `Notification` and that event's time (the status file's mtime) is newer than its seen time (0 when there is no seen file). A later `UserPromptSubmit` or `SessionStart` makes it not unread, whatever the seen time.
 - Owner decision 1: a session whose Stop or Notification arrives while its window has focus is not counted, and arriving at a window clears it. The VS Code extension now enforces this by writing seen files, so the app only compares times.
 - Sounds:
   - `SoundNotifier::observe` (`notify/sound.rs:213-245`) skips `session.is_current` (`:238`).
@@ -47,7 +48,7 @@ None match.
   - `pub fn apply_status(&mut self, record: StatusRecord, now_ms: u64)`:
     1. `let now = self.clock.now(); let age = Duration::from_millis(now_ms.saturating_sub(record.written_at_ms)); let at = now.checked_sub(age).unwrap_or(now);`
     2. `apply_event(record.event, at)`, so the session's event time, its sort order and any working time start at the recorded time.
-    3. For Stop and Notification, also set `attention_at_ms = Some(record.written_at_ms)`.
+    3. For Stop and Notification, set `attention_at_ms = Some(record.written_at_ms)`. For every other event (UserPromptSubmit, SessionStart), set `attention_at_ms = None`. So `attention_at_ms` is `Some` only while the last applied event is Stop or Notification, and `unread()` matches the extension's rule exactly.
     4. SessionEnd removes the session as today.
   - `pub fn apply_seen(&mut self, session_id: &str, seen_at_ms: u64)` keeps the max, and does nothing for unknown sessions.
   - `pub fn mark_read(&mut self, session_id: &str, now_ms: u64)` sets `seen_at_ms = max(seen, now_ms)`.
@@ -74,7 +75,7 @@ None match.
 - Wall-clock ms (status file mtime, seen time, `now_ms`) is never compared against the registry's `Instant` clock directly. The only bridge is the age subtraction in `apply_status`. A record dated in the future (clock skew) has age 0 and lands at `now`.
 - If a `Session` timing field must stay monotonic (for example a session the scan already marked present at `now` receiving an older recorded event), keep that one field at the max of the two instants rather than moving it backwards. Do not clamp the event time itself to `now`.
 - The registry tests use `apply_hook_event` heavily for unread. Rewrite the unread tests against `apply_status`, `apply_seen` and `mark_read`. Delete tests for focus-driven unread, since that behaviour is removed on purpose.
-- In `sound.rs` tests, delete the `FocusReport`/`WindowId` imports, `const WINDOW`, `Harness::focus` and the seven focus tests listed above. They test a rule this task removes, and `apply_focus_report` is deleted in 03_06. Make `Harness::hook` feed Stop and Notification through `apply_status` (with a `written_at_ms` that advances per call and a matching `now_ms`) so they are unread, and have `Harness::new` call `arm()` and run one baseline `observe()` so the existing transition tests keep their meaning.
+- In `sound.rs` tests, delete the `FocusReport`/`WindowId` imports, `const WINDOW`, `Harness::focus` and the seven focus tests listed above. They test a rule this task removes, and `apply_focus_report` is deleted in 03_06. Make `Harness::hook` feed every event through `apply_status` (with a `written_at_ms` that advances per call and a matching `now_ms`), so Stop and Notification are unread and a later event clears attention as in production, and have `Harness::new` call `arm()` and run one baseline `observe()` so the existing transition tests keep their meaning.
 - Sounds must skip a session that is already seen when its transition is observed, and only that. Task 02_04's feed holds a new `Stop` or `Notification` for one 500 ms pass so the extension's seen write (about 150 ms after the status file) is applied together with it; that timing lives entirely in the feed, so do not add a delay or hold to `SoundNotifier`.
 - `SessionSnapshot.unread` stays a `bool` field, so the frontend contract is unchanged. Do not add fields to `SessionSnapshot`: `tray/icon.rs` and `ipc/snapshot_channel.rs` build it in their tests.
 
@@ -84,6 +85,7 @@ None match.
   - Stop via `apply_status` is unread, and an `apply_seen` older than it stays unread while a newer one clears it.
   - Notification behaves the same way.
   - SessionStart and UserPromptSubmit are never unread.
+  - Same rule as the extension: a Stop with no seen file, followed by a newer UserPromptSubmit record, is not unread (no seen file at all); a following Stop newer than seen is unread again; a Stop followed by a SessionStart record is not unread.
   - `mark_read` clears it, and a later Stop raises it again.
   - `unread_count` matches.
   - Recorded time: two sessions whose Stop records are applied in the order newer-then-older (`written_at_ms` 1 h ago and 2 h ago, same `now_ms`) sort with the newer one first; a `UserPromptSubmit` recorded 10 minutes before `now_ms` shows about 10 minutes of working time immediately.
