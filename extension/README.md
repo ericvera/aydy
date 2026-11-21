@@ -1,11 +1,11 @@
 # AYDY Companion
 
-Tells **AYDY** which Claude Code sessions belong to this VS Code window.
+Tracks Claude Code sessions for **AYDY** and shows how many need you in each window's
+tab.
 
-AYDY lists every active Claude Code session in the macOS menu bar. Without this
-extension it still lists and groups them, and clicking a session still raises a VS Code
-window where the folder identifies one. What this adds is the window itself: which
-sessions are in which window, which tab is in front, and the ability to be sent to one.
+AYDY lists every active Claude Code session in the macOS menu bar. This extension feeds
+it every session's state through files a hook script writes, keeps each window's count of
+sessions that need you, and answers when AYDY asks to jump to a session.
 
 ## Installing it
 
@@ -17,7 +17,7 @@ code --install-extension extension/aydy-companion-0.1.0.vsix
 ```
 
 Uninstall the same way, so that the record of the install is unwound as well as the
-files:
+files. Uninstalling also removes AYDY's hook entries from Claude Code's settings:
 
 ```sh
 code --uninstall-extension aydy.aydy-companion
@@ -32,62 +32,23 @@ extensions detected** in the Extensions view of every open window until the entr
 removed.
 
 Beyond installing there is nothing to configure, and this extension contributes no
-settings on purpose. AYDY publishes the port it is listening on and the extension reads
-it; if AYDY is not running, or is not installed, the extension does nothing at all and
-says nothing about it.
+settings on purpose. It works whether or not AYDY is running, because it only reads and
+writes files.
 
-## What it reports
+## What it does
 
-Once per window, then on a heartbeat, and again the moment one of them changes:
+Everything goes through files under `~/Library/Application Support/app.aydy/`:
 
-- **The extension host's process id.** VS Code has no window identifier of any kind, but
-  each window runs its own extension host and every Claude Code session started in a
-  window is a descendant of that window's host. So this number is what lets AYDY say
-  which sessions belong here.
-- **The window's workspace folders**, which is how AYDY knows a window holding a given
-  repository exists before it tries to raise one.
-- **The version of the Claude Code extension**, if it is installed here.
+- **`status/<session>.json`.** On activation the extension copies its hook script to
+  `bin/aydy-hook.sh` there and adds it to the hooks in Claude Code's `settings.json`. Claude Code runs it on each hook event, and it writes the
+  event as that session's status file, removing it when the session ends.
+- **`seen/<session>.json`.** Each window writes one when you are looking at that
+  window while one of its sessions has something new, which is what clears it.
+- **`windows/<pid>.json`.** Each window publishes its workspace folders under its
+  extension host's process id, and withdraws the file when it closes. A session belongs
+  to the window whose folder most specifically contains the directory it was launched in.
 
-Folders are added to and removed from a multi-root workspace without VS Code restarting
-the extension host, so a change to them is reported when it happens rather than at the
-next reload — AYDY chooses the window to send a session to from that list, and a stale
-one sends it to the wrong window.
-
-And whenever they change, debounced so that alt-tabbing does not cost a report per flap:
-
-- **Whether this window has focus.**
-- **The label on this window's active Claude Code tab**, or nothing when the tab in
-  front is not one. A session opened in the sidebar is a view rather than a tab and
-  never appears here at all.
-
-Those are two facts and they are sent as two. A Claude tab left in front of a window
-sitting behind a browser means the user is **not** watching that session, which is
-precisely the case AYDY exists to notify about — so a single "being watched" flag would
-silently switch notifications off for anyone who leaves VS Code open in the background.
-Losing focus is reported as carefully as gaining it, for the same reason: a window AYDY
-still believes is in front goes on silencing its own sessions.
-
-Both are also said again whenever AYDY takes a fresh registration of this window. An AYDY
-that has just started holds nothing about where the user is, and these two are the only
-things reported on change alone — so an editor sitting untouched while AYDY restarts
-would otherwise go unaccounted for until the user next moved focus or switched tabs.
-
-It reports facts and runs commands. It does not decide which session is which, match
-titles, or hold any of AYDY's state — AYDY is the only side that can see every window at
-once. The tab label goes over raw and AYDY matches it against the session titles it
-holds, cut the way the editor cuts them; when two sessions in this window answer to the
-same label, or nothing AYDY holds answers to it at all, AYDY treats the tab as
-unidentified rather than guessing. An unread the user has to click is recoverable, and an
-unread cleared for a session they never looked at is not.
-
-A tab goes unidentified more often than it looks like it should, and always in that safe
-direction. The editor labels a session's tab with its first prompt from the moment that
-prompt is sent, and only replaces it once a title has been generated; the placeholder
-`Claude Code` is what a session shows before it has been prompted at all. AYDY holds the
-generated titles and nothing else, so any tab still showing a prompt or the placeholder
-matches nothing. A session **renamed by hand** never matches either: a rename is recorded
-as a custom title, and AYDY does not read those. Those sessions clear their unread the
-way they always have — by being clicked.
+The tab count and jump answers are described in their own sections below.
 
 ## Revealing a tab
 
@@ -101,17 +62,15 @@ Given a session this window already has open, that command reveals the existing 
 **Given one it does not, the same call creates a panel and resumes the session in it** —
 a second, live Claude session running against the user's work, started silently.
 
-So a reveal is refused unless every one of these holds, and refusing is reported to AYDY
-rather than swallowed:
+So a reveal is refused unless every one of these holds, and the refusal is written as the
+`reveal` field of the reply file rather than swallowed:
 
-- **AYDY placed the session in this window**, through the process tree. It never sends a
-  reveal for a session it could not place.
-- **The command names this window's process id.** A window that closes frees the port it
-  named and the next window to open can be given it, so a reveal arriving here for
-  another process is a reveal for a session this window does not have.
-- **A tab here carries the label AYDY expects**, which is the session's title cut the way
-  the editor cuts it. A session hosted in the sidebar is a view rather than a tab and
-  never matches — correctly, since it has no tab to reveal.
+- **This window owns the session.** Only the window whose folder most specifically
+  contains the session's launch directory claims the jump request.
+- **A tab here carries the label the request names.** The label goes in the jump request
+  file, and this window's `revealSession` matches it against its own Claude tabs. A
+  session hosted in the sidebar is a view rather than a tab and never matches —
+  correctly, since it has no tab to reveal.
 - **Claude Code is on the release line the call was read out of.** The argument order is
   undocumented and the bundle ships roughly weekly, so anything else degrades to raising
   the window without the tab.
@@ -153,23 +112,12 @@ Plain-folder windows keep VS Code's default title, and a window opened from a
 into the title literally, but VS Code still expands `${...}` inside a title, so a folder
 whose name contains one shows the expansion.
 
-## How the two find each other
+## How a jump arrives
 
-AYDY writes its current port to
-`~/Library/Application Support/app.aydy/listener.json` while it is listening, and
-removes the file when it stops. The extension reads that file on every report, so a port
-that moved is followed without anything being told about the move, and a file that is not
-there means AYDY is not running.
-
-The extension also binds a loopback port of its own and names it when it registers, which
-is how AYDY reaches **this** window and no other. AYDY confirms that port with a `ping`
-before it accepts the registration, and every answer this window gives names its own
-process id: a closed window's port can be taken by something else, and that is the only
-way to tell a stranger from the window that was asked.
-
-Sending a command to the wrong window is not a cosmetic mistake. Asking a window to
-reveal a session it does not host makes Claude Code open a second, live copy of that
-session, which is why addressing is confirmed rather than assumed.
+The app writes `jump/<id>.json`, and only the window that owns the session claims it, by
+unlinking it. That ownership rule is what keeps a reveal from reaching a window that does
+not host the session — and asking a window to reveal a session it does not host makes
+Claude Code open a second, live copy of it.
 
 ## What it depends on, and what it does not
 
@@ -184,9 +132,8 @@ It was read out of the shipped bundle — `registerCommand("claude-vscode.editor
 async (sessionId, prompt, column) => …)` — verified against **2.1.220** during planning
 and **2.1.238** while this was built. The bundle ships roughly weekly, so the reveal is
 only attempted on the **2.1** line and anything else falls back to raising the window
-without the tab. The version is reported to AYDY either way, so an unexpected one is a
-fact in a bug report rather than a mystery. A window with no Claude Code extension at all
-registers exactly the same way; it simply reveals nothing.
+without the tab. The version is only checked locally. A window with no Claude Code
+extension at all still tracks sessions and answers jumps; it simply reveals nothing.
 
 ## Building it
 

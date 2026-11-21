@@ -5,6 +5,7 @@ import {
   isVerifiedClaudeCode,
   revealSession,
   VERIFIED_CLAUDE_CODE_VERSION,
+  versionOf,
 } from './revealSession'
 
 /** Short enough to keep the suite quick, long enough for a tab to arrive. */
@@ -159,8 +160,7 @@ it('reports a tab that opened just after the call as a duplicate', async () => {
 
 /**
  * The command being gone is exactly what an extension that renamed it looks
- * like. Letting the rejection escape would have AYDY read it as a window it
- * cannot reach and drop the registration.
+ * like. A rejection that escaped would leave the jump without a reply.
  */
 it('answers rather than throwing when the command itself fails', async () => {
   const editor = window([TAB], { throws: true })
@@ -192,4 +192,14 @@ it('trusts the release line it was verified on and nothing else', () => {
   expect(isVerifiedClaudeCode('3.0.0')).toBe(false)
   expect(isVerifiedClaudeCode('')).toBe(false)
   expect(isVerifiedClaudeCode(null)).toBe(false)
+})
+
+it('reads the Claude Code version a manifest declares', () => {
+  expect(versionOf({ version: '2.1.238' })).toBe('2.1.238')
+})
+
+it('reads no version from a manifest that declares none', () => {
+  expect(versionOf(undefined)).toBeNull()
+  expect(versionOf({})).toBeNull()
+  expect(versionOf({ version: 42 })).toBeNull()
 })
