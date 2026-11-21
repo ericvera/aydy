@@ -5,16 +5,16 @@ import { expect, it } from 'vitest'
 
 import JumpFailureNotice from './JumpFailureNotice.vue'
 
-const notice = (failure: 'unconfirmed' | 'duplicated'): VueWrapper =>
+const notice = (failure: 'unanswered' | 'duplicated'): VueWrapper =>
   mount(JumpFailureNotice, { props: { failure } })
 
 /**
- * Every mechanism a jump is made of fails silently, so a click that did
- * nothing would otherwise look like an app that ignored it.
+ * A click that did nothing would otherwise look like an app that ignored it,
+ * and a window nobody heard from is most likely one that was closed.
  */
-it('says the window never came forward when nothing confirmed the jump', () => {
-  expect(renderedText(notice('unconfirmed').element)).toContain(
-    'VS Code did not come forward. AYDY asked twice and heard nothing back.',
+it('says no window took the jump when none answered it', () => {
+  expect(renderedText(notice('unanswered').element)).toContain(
+    'No VS Code window took the jump. The window that had this session may be closed.',
   )
 })
 
@@ -29,13 +29,13 @@ it('says what to do about a tab that opened instead', () => {
 })
 
 /**
- * A jump nothing confirmed may well have worked; a tab that opened is known to
- * be wrong. The two are not the same weight and are not drawn as though they
+ * A jump no window answered changed nothing; a tab that opened is known to be
+ * wrong. The two are not the same weight and are not drawn as though they
  * were.
  */
-it('weighs an unconfirmed jump below a duplicated session', () => {
+it('weighs an unanswered jump below a duplicated session', () => {
   expect(
-    notice('unconfirmed').findComponent({ name: 'Banner' }).props('variant'),
+    notice('unanswered').findComponent({ name: 'Banner' }).props('variant'),
   ).toBe('warning')
   expect(
     notice('duplicated').findComponent({ name: 'Banner' }).props('variant'),
@@ -43,7 +43,7 @@ it('weighs an unconfirmed jump below a duplicated session', () => {
 })
 
 it('can be dismissed', async () => {
-  const wrapper = notice('unconfirmed')
+  const wrapper = notice('unanswered')
 
   await wrapper.get('[aria-label="Dismiss"]').trigger('click')
 

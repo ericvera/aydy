@@ -341,17 +341,18 @@ it('leaves the popover open and says nothing when a jump found no window', async
     'mark_read',
     'jump_to_session',
   ])
-  expect(renderedText(wrapper.element)).not.toContain('did not come forward')
+  expect(renderedText(wrapper.element)).not.toContain(
+    'No VS Code window took the jump',
+  )
 })
 
 /**
- * Every mechanism a jump is made of fails silently, so a jump nothing
- * confirmed has to be said out loud rather than reported as a success the user
- * can see did not happen.
+ * A jump no window answered has to be said out loud rather than reported as a
+ * success the user can see did not happen.
  */
-it('says so when a jump was never confirmed', async () => {
+it('says so when no window answered the jump', async () => {
   const wrapper = await showing(list(1, 1, [okvenMain]))
-  answers.jump = 'unconfirmed'
+  answers.jump = 'unanswered'
 
   await wrapper
     .getComponent({ name: 'SessionList' })
@@ -360,7 +361,7 @@ it('says so when a jump was never confirmed', async () => {
   await flushPromises()
 
   expect(renderedText(wrapper.element)).toContain(
-    'VS Code did not come forward. AYDY asked twice and heard nothing back.',
+    'No VS Code window took the jump. The window that had this session may be closed.',
   )
   expect(invoked.map((call) => call.command)).not.toContain('close_popover')
 })
@@ -385,7 +386,7 @@ it('warns when a reveal opened a tab instead of revealing one', async () => {
 
 it('takes the jump notice away when it is dismissed', async () => {
   const wrapper = await showing(list(1, 1, [okvenMain]))
-  answers.jump = 'unconfirmed'
+  answers.jump = 'unanswered'
   await wrapper
     .getComponent({ name: 'SessionList' })
     .get('button')
@@ -394,7 +395,9 @@ it('takes the jump notice away when it is dismissed', async () => {
 
   await wrapper.get('[aria-label="Dismiss"]').trigger('click')
 
-  expect(renderedText(wrapper.element)).not.toContain('did not come forward')
+  expect(renderedText(wrapper.element)).not.toContain(
+    'No VS Code window took the jump',
+  )
 })
 
 /**

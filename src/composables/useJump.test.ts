@@ -61,18 +61,6 @@ it('asks the app to take the user to a session', async () => {
 })
 
 /**
- * Without the companion extension nothing in that window can confirm the
- * raise, so the raise having run is the whole of the answer there is — and it
- * is enough to have navigated.
- */
-it('counts a raise nothing could confirm as having navigated', async () => {
-  const jumping = await load('raised')
-
-  expect(await jumping.jump('0d4b9a1c')).toBe(true)
-  expect(jumping.failure.value).toBe(null)
-})
-
-/**
  * The click goes nowhere and says nothing, which is what a row that cannot be
  * jumped to has always done. Reporting an error here would make an ordinary
  * state look broken.
@@ -84,11 +72,11 @@ it('does not navigate and does not complain when no window was found', async () 
   expect(jumping.failure.value).toBe(null)
 })
 
-it('reports a jump nothing ever confirmed', async () => {
-  const jumping = await load('unconfirmed')
+it('reports a jump no window answered', async () => {
+  const jumping = await load('unanswered')
 
   expect(await jumping.jump('0d4b9a1c')).toBe(false)
-  expect(jumping.failure.value).toBe('unconfirmed')
+  expect(jumping.failure.value).toBe('unanswered')
 })
 
 it('reports a reveal that opened a tab of its own', async () => {
@@ -99,20 +87,20 @@ it('reports a reveal that opened a tab of its own', async () => {
 })
 
 /**
- * A jump that could not even be asked for is a jump nothing confirmed.
+ * A jump that could not even be asked for is a jump no window answered.
  * Claiming otherwise is the silent success this whole path exists to avoid.
  */
 it('reports a jump the app never answered', async () => {
   const jumping = await load('jumped', true)
 
   expect(await jumping.jump('0d4b9a1c')).toBe(false)
-  expect(jumping.failure.value).toBe('unconfirmed')
+  expect(jumping.failure.value).toBe('unanswered')
 })
 
 it('clears the last failure when the next jump is asked for', async () => {
-  const jumping = await load('unconfirmed')
+  const jumping = await load('unanswered')
   await jumping.jump('0d4b9a1c')
-  expect(jumping.failure.value).toBe('unconfirmed')
+  expect(jumping.failure.value).toBe('unanswered')
 
   answers.outcome = 'jumped'
   await jumping.jump('0d4b9a1c')
@@ -121,7 +109,7 @@ it('clears the last failure when the next jump is asked for', async () => {
 })
 
 it('clears the last failure when it is dismissed', async () => {
-  const jumping = await load('unconfirmed')
+  const jumping = await load('unanswered')
   await jumping.jump('0d4b9a1c')
 
   jumping.dismiss()

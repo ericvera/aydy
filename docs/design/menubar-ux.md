@@ -286,26 +286,24 @@ the editor reports.
 
 ### What a jump does, and what it says when it cannot
 
-The tab first, then the window: the extension is asked to bring the session's own
-tab forward, and only then is the window raised. The other order has the user
-watch the tab switch after the window is already in front of them.
+A click writes a request file naming the session. The one VS Code window that
+owns the session picks it up, brings the session's own tab forward and answers
+with what to raise; only then does the app raise it. The tab moves first, so
+the user never watches it switch after the window is already in front of them.
 
 **It closes the popover on the answer, not on the click.** A jump that found no
-window to raise did not navigate, and that is a click that leaves the popover
-open — so the popover is taken down once the app has said which of the two
-happened. The wait is invisible in the ordinary case, because the window coming
-forward takes focus from the popover and the popover hides on focus loss before
-the answer arrives.
+window did not navigate, and that is a click that leaves the popover open — so
+the popover is taken down once the app has said which of the two happened. The
+wait is invisible in the ordinary case, because the window coming forward takes
+focus from the popover and the popover hides on focus loss before the answer
+arrives.
 
-**Nothing is reported as a success until the window says so.** Every mechanism
-behind a jump fails silently — the editor command answers about a tab rather
-than about focus, and `code` answers as soon as it has handed the folder over —
-so the app waits for the extension's own focus report, tries once more without
-it, and then says it could not. There are two ways for a jump to be said out
-loud, and they are not the same weight:
+**Nothing is reported as a success until a window answers.** If no window picks
+the request up within a few seconds, the app stops waiting and says so. There
+are two ways for a jump to be said out loud, and they are not the same weight:
 
-- **VS Code did not come forward** — a `warning`. It may well have worked;
-  nothing confirmed it.
+- **No VS Code window took the jump.** The window that had this session may be
+  closed — a `warning`. Nothing moved, and nothing needs undoing.
 - **A new Claude tab opened** — an `error`, and the only banner in the app that
   asks the user to do something to an editor: close the tab without typing in
   it. It means a guard was wrong and a second live copy of that session may now
@@ -315,11 +313,6 @@ Both are dismissible and both go away by themselves the moment another row is
 clicked. A jump that simply found no window says **nothing at all** — that is
 the ordinary state of a session AYDY cannot place, and drawing it as a failure
 would make an app that is working look broken.
-
-**Without the extension a click still raises a window**, because Claude Code
-writes one lock file per editor window naming the folders it has open, and that
-answers the only question raising needs: does a window have this folder open? A
-session neither the extension nor those files can place goes nowhere, silently.
 
 ### Offering the companion extension
 
