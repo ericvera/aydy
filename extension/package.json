@@ -9,10 +9,16 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "extensionKind": [
+    "ui"
+  ],
   "categories": [
     "Other"
   ],
   "main": "./out/extension.js",
+  "scripts": {
+    "vscode:uninstall": "node ./out/uninstall.js"
+  },
   "activationEvents": [
     "onStartupFinished"
   ],

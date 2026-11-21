@@ -2,8 +2,15 @@ import * as vscode from 'vscode'
 
 import type { WindowFacts } from './aydyClient'
 import { AydyClient, aydyPortFilePath, versionOf } from './aydyClient'
+import { claudeSettingsPath } from './aydyPaths'
 import type { FocusState } from './focusReporter'
 import { FocusReporter } from './focusReporter'
+import {
+  claimFailureNotice,
+  failureMessage,
+  releaseFailureNotice,
+} from './hookNotice'
+import { ensureHooks, installHookScript } from './hookInstall'
 import type { RevealEnvironment, RevealRequest } from './revealSession'
 import { revealSession } from './revealSession'
 
@@ -110,6 +117,39 @@ const focusState = (): FocusState => ({
   activeTabLabel: activeTabLabel(),
 })
 
+const OPEN_FILE = 'Open file'
+const TRY_AGAIN = 'Try again'
+
+const installTracking = async (
+  context: vscode.ExtensionContext,
+): Promise<void> => {
+  try {
+    await installHookScript(context.extensionPath)
+    const result = await ensureHooks()
+    if (result.ok) {
+      await releaseFailureNotice()
+      return
+    }
+    if (!(await claimFailureNotice())) {
+      return
+    }
+    const settingsPath = claudeSettingsPath()
+    const choice = await vscode.window.showErrorMessage(
+      failureMessage(result.reason, settingsPath),
+      OPEN_FILE,
+      TRY_AGAIN,
+    )
+    if (choice === OPEN_FILE) {
+      await vscode.window.showTextDocument(vscode.Uri.file(settingsPath))
+    } else if (choice === TRY_AGAIN) {
+      await releaseFailureNotice()
+      await installTracking(context)
+    }
+  } catch {
+    // Tracking is best effort; activation must go on without it.
+  }
+}
+
 /**
  * Starts reporting this window to AYDY.
  *
@@ -118,6 +158,8 @@ const focusState = (): FocusState => ({
  * machines, and leaves this doing nothing visible at all.
  */
 export const activate = (context: vscode.ExtensionContext): void => {
+  void installTracking(context)
+
   const started = new AydyClient({
     facts: windowFacts(),
     portFilePath: aydyPortFilePath(),
