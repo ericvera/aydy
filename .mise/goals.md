@@ -40,8 +40,22 @@ Owner decisions already made in the conversation:
 - Hard to undo (from the branch's existing work): `sweepWorkspaces` and `removeLegacyWorkspace` delete files; `forgetOfferFlags` clears globalState; the public setting defaults to true; a false "safe" restarts the window and ends live work.
 - No UI mock needed (no Vue change).
 
-## Open questions
+## Owner decisions
 
-1. Match sessions to this window by process ancestry or by folder?
-2. Do Claude Code tabs still block on their own?
-3. When state is unknown (terminal with no pid, Notification that may be the idle reminder, check failure), block or not?
+- Sessions belong to this window by process ancestry: live sessions descending from this window's extension host pid. A Claude Code CLI in a terminal is covered by the terminal check.
+- A Claude Code tab no longer blocks on its own; only a session in this window that is working (last event UserPromptSubmit) or waiting (Notification) blocks.
+- When in doubt, block and show the notification: a terminal with no processId (pseudoterminal or not yet known), a Notification that may be the idle reminder (it counts as waiting), or any failed check.
+
+## Assumptions
+
+- A session with no status file yet (never fired a hook) is idle, since nothing is running in it.
+- A terminal is busy when its shell pid has any child process in `ps`; an idle shell at a prompt has none.
+- The notification copy keeps listing reasons in prose, reworded to name what is running (e.g. "a Claude Code session that is working", "a terminal running a process", "unsaved files").
+- The README auto-reopen bullet and the setting's markdownDescription are updated to the new rule.
+- No mock: the only user-facing change is VS Code notification and README copy, not Vue UI.
+
+## Proposal
+
+Issue: the auto-reopen safety check blocks on any terminal or Claude Code tab, though idle ones lose nothing on restart.
+Approach: block only on working/waiting sessions under this window's process, terminals whose shell has a child process, and unsaved files; unknowns block. Then review the whole branch.
+Skips: spec and critic (one module's change, no schema or API change).
