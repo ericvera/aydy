@@ -39,10 +39,10 @@ use tokio::time::MissedTickBehavior;
 
 use crate::discovery::reconciler::ScanShutdown;
 use crate::discovery::transcript::{self, Stamp};
-use crate::listener::server::lock_recovering;
 use crate::session::event::SessionId;
 use crate::session::registry::SessionRegistry;
 use crate::session::status::SessionStatus;
+use crate::sync::lock_recovering;
 
 /// How often the transcripts of waiting sessions are checked.
 ///

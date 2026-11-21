@@ -3,7 +3,7 @@
 
 use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -22,6 +22,7 @@ use crate::listener::routes::{
 use crate::session::event::{HookEvent, WindowId};
 use crate::session::registry::SessionRegistry;
 use crate::session::tab_match::WindowFocus;
+pub use crate::sync::lock_recovering;
 
 /// One thing the registry is told, queued off the request path.
 ///
@@ -109,16 +110,6 @@ pub fn router(state: ListenerState) -> Router {
 /// degrade the caller's session.
 async fn accept_quietly() -> StatusCode {
     StatusCode::OK
-}
-
-/// Locks `value`, recovering from a mutex poisoned by an earlier panic.
-///
-/// A panic anywhere near the registry must not stop session tracking, and a
-/// poisoned lock left unrecovered would stop it permanently.
-pub fn lock_recovering<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
-    value
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Applies queued inputs to the registry, one at a time, off the request path.

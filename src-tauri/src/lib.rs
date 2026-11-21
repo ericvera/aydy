@@ -10,6 +10,7 @@ pub mod notify;
 pub mod port_file;
 pub mod session;
 pub mod settings;
+pub mod sync;
 #[cfg(test)]
 mod test_support;
 pub mod tray;
