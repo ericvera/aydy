@@ -25,6 +25,7 @@ use crate::discovery::process_tree::SystemParents;
 use crate::discovery::reconciler::{user_sessions_dir, Reconciler, ScanShutdown};
 use crate::discovery::resume::ResumeShutdown;
 use crate::discovery::session_files::LiveProcesses;
+use crate::discovery::status_files::DataDir;
 use crate::discovery::transcript::user_projects_dir;
 use crate::extension::command::{ExtensionCommands, LoopbackChannel};
 use crate::extension::registry::ExtensionRegistry;
@@ -171,6 +172,7 @@ pub fn run() {
             let (publish_signal, publish_shutdown) = tokio::sync::oneshot::channel();
 
             app.manage(Arc::clone(&registry));
+            app.manage(DataDir::new(app.path().app_data_dir()?));
             app.manage(Arc::clone(&ports));
             app.manage(Arc::clone(&health));
             app.manage(Arc::clone(&hooks));

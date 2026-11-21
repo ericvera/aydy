@@ -9,19 +9,21 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::discovery::status_files::{write_seen, DataDir};
 use crate::extension::registry::ExtensionRegistry;
 use crate::hooks::install::{ChangePreview, HookInstaller};
 use crate::hooks::merge::HookKind;
 use crate::hooks::HookError;
 use crate::jump::{JumpOutcome, JumpTarget, Jumper};
 use crate::listener::port::PortState;
-use crate::listener::server::{lock_recovering, ListenerHealth};
+use crate::listener::server::ListenerHealth;
 use crate::session::registry::SessionRegistry;
+use crate::sync::lock_recovering;
 use crate::tray::popover::{hide, suppress_next_focus_loss, POPOVER_LABEL};
 
 /// How long a command waits for the listener to bind before giving up.
@@ -175,17 +177,40 @@ pub fn reveal_command(path: &Path) -> (&'static str, Vec<&OsStr>) {
 /// This is the only way unread clears without the companion extension, so it
 /// runs for every row — a row that cannot be jumped to still clears.
 #[tauri::command]
-pub fn mark_read(session_id: String, registry: State<'_, Arc<Mutex<SessionRegistry>>>) {
-    mark_session_read(&registry, &session_id);
+pub fn mark_read(
+    session_id: String,
+    registry: State<'_, Arc<Mutex<SessionRegistry>>>,
+    data: State<'_, DataDir>,
+) {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        });
+
+    mark_session_read(&registry, &data, &session_id, now_ms);
 }
 
 /// The body of [`mark_read`], reachable without a Tauri app to hold state.
 ///
+/// The seen file is written as well as the registry updated, so the VS Code
+/// tab count agrees with the popover. A seen file that cannot be written
+/// leaves the row read here and is not a reason to fail the click.
+///
 /// A session the registry no longer holds is not an error: the row was
 /// rendered from a snapshot that can be a fraction of a second old, and the
 /// session it named may have ended in between.
-pub fn mark_session_read(registry: &Mutex<SessionRegistry>, session_id: &str) {
-    lock_recovering(registry).mark_read(session_id);
+pub fn mark_session_read(
+    registry: &Mutex<SessionRegistry>,
+    data: &DataDir,
+    session_id: &str,
+    now_ms: u64,
+) {
+    lock_recovering(registry).mark_read(session_id, now_ms);
+
+    if let Err(error) = write_seen(&data.seen_dir(), session_id, now_ms) {
+        eprintln!("aydy: could not record {session_id} as seen: {error}");
+    }
 }
 
 /// Takes the user to a session, which is what clicking a jumpable row does.
@@ -464,6 +489,7 @@ mod tests {
     use crate::clock::TestClock;
     use crate::discovery::process_tree::FixedParents;
     use crate::discovery::session_files::SessionFile;
+    use crate::discovery::status_files::{read_seen, StatusRecord};
     use crate::discovery::window_map::associate;
     use crate::extension::registry::{ExtensionPid, Registration};
     use crate::hooks::install::{AddedHook, HookRegistry};
@@ -784,14 +810,28 @@ mod tests {
         );
     }
 
-    /// A registry holding one session that a `Stop` has left unread.
+    /// The wall-clock ms the click tests are dated against.
+    const NOW_MS: u64 = 1_790_000_000_000;
+
+    fn stop(session_id: &str, written_at_ms: u64) -> StatusRecord {
+        StatusRecord {
+            event: HookEvent::new(session_id, HookEventKind::Stop),
+            written_at_ms,
+        }
+    }
+
+    /// A registry holding one session that a `Stop` record has left unread.
     fn unread_session() -> Mutex<SessionRegistry> {
         let mut registry = SessionRegistry::new(Arc::new(TestClock::new()));
 
-        registry.apply_hook_event(HookEvent::new("session-1", HookEventKind::UserPromptSubmit));
-        registry.apply_hook_event(HookEvent::new("session-1", HookEventKind::Stop));
+        registry.apply_status(stop("session-1", NOW_MS - 1_000), NOW_MS);
 
         Mutex::new(registry)
+    }
+
+    /// A data directory of the test's own, so no test writes the real one.
+    fn scratch_data(name: &str) -> DataDir {
+        DataDir::new(scratch_dir(name))
     }
 
     /// The extension host of the window the session below is placed in.
@@ -834,7 +874,7 @@ mod tests {
         lock_recovering(registry)
             .session(session_id)
             .expect("the session to be tracked")
-            .unread
+            .unread()
     }
 
     /// A session placed in a window by the scan, labelled by the transcript
@@ -876,7 +916,32 @@ mod tests {
         let registry = unread_session();
         assert!(is_unread(&registry, "session-1"));
 
-        mark_session_read(&registry, "session-1");
+        mark_session_read(&registry, &scratch_data("click"), "session-1", NOW_MS);
+
+        assert!(!is_unread(&registry, "session-1"));
+    }
+
+    /// The seen file is what the VS Code tab count reads, so a click that only
+    /// updated the registry would leave the two disagreeing.
+    #[test]
+    fn clicking_a_row_writes_its_seen_file() {
+        let registry = unread_session();
+        let data = scratch_data("seen-file");
+
+        mark_session_read(&registry, &data, "session-1", NOW_MS);
+
+        assert_eq!(read_seen(&data.seen_dir()).get("session-1"), Some(&NOW_MS));
+        assert!(data.seen_dir().join("session-1.json").is_file());
+    }
+
+    /// A seen file that cannot be written is logged, never a failed click.
+    #[test]
+    fn a_seen_file_that_cannot_be_written_still_marks_the_row_read() {
+        let registry = unread_session();
+        let data = scratch_data("seen-blocked");
+        fs::write(data.seen_dir(), "not a directory").expect("the blocking file");
+
+        mark_session_read(&registry, &data, "session-1", NOW_MS);
 
         assert!(!is_unread(&registry, "session-1"));
     }
@@ -884,12 +949,9 @@ mod tests {
     #[test]
     fn clicking_one_row_leaves_every_other_session_unread() {
         let registry = unread_session();
-        lock_recovering(&registry)
-            .apply_hook_event(HookEvent::new("session-2", HookEventKind::UserPromptSubmit));
-        lock_recovering(&registry)
-            .apply_hook_event(HookEvent::new("session-2", HookEventKind::Stop));
+        lock_recovering(&registry).apply_status(stop("session-2", NOW_MS - 1_000), NOW_MS);
 
-        mark_session_read(&registry, "session-1");
+        mark_session_read(&registry, &scratch_data("one-row"), "session-1", NOW_MS);
 
         assert!(!is_unread(&registry, "session-1"));
         assert!(is_unread(&registry, "session-2"));
@@ -902,7 +964,12 @@ mod tests {
     fn clicking_a_row_for_a_session_that_has_gone_does_nothing() {
         let registry = unread_session();
 
-        mark_session_read(&registry, "session-that-ended");
+        mark_session_read(
+            &registry,
+            &scratch_data("ended"),
+            "session-that-ended",
+            NOW_MS,
+        );
 
         assert!(is_unread(&registry, "session-1"));
     }
@@ -925,7 +992,7 @@ mod tests {
         assert!(panicked.is_err());
         assert!(registry.is_poisoned());
 
-        mark_session_read(&registry, "session-1");
+        mark_session_read(&registry, &scratch_data("poisoned"), "session-1", NOW_MS);
 
         assert!(!is_unread(&registry, "session-1"));
     }
@@ -942,7 +1009,7 @@ mod tests {
         clock.advance(Duration::from_secs(60));
 
         let registry = Mutex::new(registry);
-        mark_session_read(&registry, "session-1");
+        mark_session_read(&registry, &scratch_data("keeps-state"), "session-1", NOW_MS);
 
         let snapshot = lock_recovering(&registry).snapshot();
         let session = snapshot.groups[0].sessions[0].clone();

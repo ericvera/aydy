@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::clock::Clock;
+use crate::discovery::status_files::StatusRecord;
 use crate::discovery::window_map::WindowMap;
 use crate::session::event::{
     FocusReport, HookEvent, HookEventKind, ReconciliationResult, SessionEnrichment, SessionId,
@@ -182,9 +183,49 @@ impl SessionRegistry {
     }
 
     /// Applies a hook event, creating the session if it has not been seen
-    /// before.
+    /// before. It does not touch unread, which only status records raise.
     pub fn apply_hook_event(&mut self, event: HookEvent) {
         let now = self.clock.now();
+        self.apply_event(event, now);
+    }
+
+    /// Applies a status record as of the time it was recorded rather than the
+    /// time it was read, so a `Stop` written yesterday sorts as yesterday's and
+    /// a turn begun ten minutes ago has ten minutes of working time.
+    ///
+    /// Wall-clock time only reaches the monotonic clock through the record's
+    /// age. A record dated in the future has no age and lands at now.
+    ///
+    /// Only a `Stop` or `Notification` asks for attention, and any other event
+    /// withdraws it, so a session is unread exactly while its last event is one
+    /// of those two and is newer than its seen time.
+    pub fn apply_status(&mut self, record: StatusRecord, now_ms: u64) {
+        let now = self.clock.now();
+        let age = Duration::from_millis(now_ms.saturating_sub(record.written_at_ms));
+        let at = now.checked_sub(age).unwrap_or(now);
+        let session_id = record.event.session_id.clone();
+        let attention = matches!(
+            record.event.kind,
+            HookEventKind::Stop | HookEventKind::Notification { .. }
+        )
+        .then_some(record.written_at_ms);
+
+        self.apply_event(record.event, at);
+
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            session.attention_at_ms = attention;
+        }
+    }
+
+    /// Records that a session was seen at `seen_at_ms`, keeping the latest
+    /// seen time. Unknown session ids are ignored.
+    pub fn apply_seen(&mut self, session_id: &str, seen_at_ms: u64) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.seen_at_ms = Some(session.seen_at_ms.unwrap_or(0).max(seen_at_ms));
+        }
+    }
+
+    fn apply_event(&mut self, event: HookEvent, at: Instant) {
         let HookEvent {
             session_id,
             cwd,
@@ -198,12 +239,7 @@ impl SessionRegistry {
             return;
         }
 
-        let notifies = matches!(
-            kind,
-            HookEventKind::Stop | HookEventKind::Notification { .. }
-        );
-        let watched = self.is_watched(&session_id);
-        let session = self.entry(&session_id, now);
+        let session = self.entry(&session_id, at);
 
         if cwd.is_some() {
             session.cwd = cwd;
@@ -212,11 +248,7 @@ impl SessionRegistry {
             session.transcript_path = transcript_path;
         }
 
-        session.apply_hook(&kind, now);
-
-        if notifies && !watched {
-            session.unread = true;
-        }
+        session.apply_hook(&kind, at);
     }
 
     /// Applies one reconciliation scan.
@@ -350,21 +382,6 @@ impl SessionRegistry {
     ///
     /// The label is kept as reported, so that the match behind it can be made
     /// again every time what it reads changes.
-    ///
-    /// **A report from a window with focus reads everything that window is
-    /// running.** Not only the session on its active tab: a person at their
-    /// editor is nearly always looking at a source file, a diff, a terminal or
-    /// the settings, and the window says it has no Claude tab in front whenever
-    /// they are. Clearing only the active tab's session left the mark standing
-    /// on a window the user had plainly just come back to, and there is no
-    /// second report coming to correct it. A window is also where its tabs are
-    /// visible: arriving at one is being shown every session it holds.
-    ///
-    /// Only a report clears this way. The re-match below runs on every scan and
-    /// says nothing new about where the user is, so putting the sweep there
-    /// would clear a session's unread within a scan of raising it, and a
-    /// session that finished behind the tab in front would never be announced
-    /// at all.
     pub fn apply_window_focus(&mut self, focus: WindowFocus) {
         let WindowFocus {
             window_id,
@@ -387,29 +404,6 @@ impl SessionRegistry {
         let active_session = self.identify_tab(window_id);
 
         self.apply_focus_report(FocusReport::new(window_id, focused, active_session));
-
-        if focused {
-            self.read_window(window_id);
-        }
-    }
-
-    /// Marks every session `window_id` is running read.
-    ///
-    /// Membership comes from the process tree rather than from a tab label, so
-    /// this reaches the sessions a title match cannot: an untitled one, one
-    /// whose tab still shows its first prompt, one the user renamed by hand.
-    /// Those are most of them, and they are why clearing on the active tab
-    /// alone so rarely cleared anything.
-    ///
-    /// A session in another window is untouched however long that window has
-    /// been unread, because a session is in exactly one window and this asks
-    /// each session which.
-    fn read_window(&mut self, window_id: WindowId) {
-        for session in self.sessions.values_mut() {
-            if session.window == Some(window_id) {
-                session.unread = false;
-            }
-        }
     }
 
     /// The session showing on the tab `window` last reported.
@@ -418,7 +412,7 @@ impl SessionRegistry {
     /// repeat across windows — two branches of the same work commonly produce
     /// the same summary — and a tab is only ever showing a session that window
     /// is running, so scoping the match here is what stops one window's tab
-    /// clearing another window's unread.
+    /// naming another window's session.
     fn identify_tab(&self, window: WindowId) -> Option<SessionId> {
         let candidates: Vec<TabCandidate<'_>> = self
             .sessions
@@ -445,8 +439,8 @@ impl SessionRegistry {
     /// arrived. A tab title changes the moment the session is titled, which is
     /// up to a scan before AYDY has read that title — and the user goes on
     /// watching the same tab, so no further report is coming. Leaving that
-    /// first match as the answer is what has the session in front of the user
-    /// raise an unread and play a sound.
+    /// first match as the answer leaves the session in front of the user not
+    /// marked as the current one.
     fn refresh_active_tabs(&mut self) {
         let windows: Vec<WindowId> = self.reported_tabs.keys().copied().collect();
 
@@ -466,12 +460,6 @@ impl SessionRegistry {
     /// A window reporting focus becomes the focused window; the previously
     /// focused one therefore stops being focused, which is what keeps the
     /// current-session mark unique.
-    ///
-    /// The tab it identifies is read here, and only that one. This runs on
-    /// every re-match as well as on a report, and its job on a re-match is to
-    /// finish what a report could not: a session that raised an unread while
-    /// AYDY still had no title for its tab, and so could not tell it was the
-    /// one in front, is the tab in front once the title arrives.
     pub fn apply_focus_report(&mut self, report: FocusReport) {
         let FocusReport {
             window_id,
@@ -492,18 +480,6 @@ impl SessionRegistry {
             self.focused_window = Some(window_id);
         } else if self.focused_window == Some(window_id) {
             self.focused_window = None;
-        }
-
-        if !focused {
-            return;
-        }
-
-        let Some(session_id) = self.active_tabs.get(&window_id).cloned() else {
-            return;
-        };
-
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            session.unread = false;
         }
     }
 
@@ -529,11 +505,10 @@ impl SessionRegistry {
         }
     }
 
-    /// Marks a session read, which is what a click in the popover does.
-    pub fn mark_read(&mut self, session_id: &str) {
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            session.unread = false;
-        }
+    /// Marks a session read as of `now_ms`, which is what a click in the
+    /// popover does.
+    pub fn mark_read(&mut self, session_id: &str, now_ms: u64) {
+        self.apply_seen(session_id, now_ms);
     }
 
     /// Settles every session that has been Unknown for longer than the
@@ -599,7 +574,7 @@ impl SessionRegistry {
         });
 
         let session_count = ordered.len();
-        let unread_count = ordered.iter().filter(|session| session.unread).count();
+        let unread_count = ordered.iter().filter(|session| session.unread()).count();
 
         let mut grouped: Vec<(GroupKey, Instant, Vec<SessionSnapshot>)> = Vec::new();
 
@@ -615,7 +590,7 @@ impl SessionRegistry {
                 repo: session.repo.clone(),
                 branch: session.branch.clone(),
                 status: session.status(),
-                unread: session.unread,
+                unread: session.unread(),
                 jumpable: session.jumpable,
                 is_current: current.as_deref() == Some(session.id.as_str()),
                 working_time: session.working_time(now),
@@ -661,19 +636,6 @@ impl SessionRegistry {
         self.sessions
             .entry(session_id.to_string())
             .or_insert_with(|| Session::new(session_id.to_string(), now))
-    }
-
-    /// Whether the app has been told the user is looking at this session — it
-    /// owns the active tab **and** that tab's window has focus.
-    ///
-    /// Deliberately narrower than what a focused window reads. Reading is the
-    /// app being told the user has arrived; staying silent is the app deciding
-    /// not to tell them at all, and the window they are typing in is exactly
-    /// where a Claude tab behind the one in front goes unnoticed. Widening this
-    /// to the window would leave a session that finished in it with no sound,
-    /// no mark and no icon — announced nowhere.
-    fn is_watched(&self, session_id: &str) -> bool {
-        self.current_session() == Some(session_id)
     }
 }
 
@@ -1250,145 +1212,6 @@ mod tests {
         assert!(registry.session("session-1").is_none());
     }
 
-    #[test]
-    fn a_finished_session_is_unread_when_no_focus_has_been_reported_at_all() {
-        let (_clock, mut registry) = registry();
-
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn a_session_that_begins_needing_input_becomes_unread() {
-        let (_clock, mut registry) = registry();
-
-        registry.apply_hook_event(hook("session-1", notification("Needs permission")));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn the_active_tab_of_a_focused_window_does_not_become_unread() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            true,
-            Some("session-1".to_string()),
-        ));
-
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(!find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn the_active_tab_of_an_unfocused_window_still_becomes_unread() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            false,
-            Some("session-1".to_string()),
-        ));
-
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn a_background_tab_of_a_focused_window_still_becomes_unread() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            true,
-            Some("session-active".to_string()),
-        ));
-
-        registry.apply_hook_event(hook("session-background", HookEventKind::Stop));
-
-        assert!(find(&registry.snapshot(), "session-background").unread);
-    }
-
-    #[test]
-    fn the_active_tab_of_a_focused_window_does_not_become_unread_when_it_needs_input() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            true,
-            Some("session-1".to_string()),
-        ));
-
-        registry.apply_hook_event(hook("session-1", notification("Needs permission for Bash")));
-
-        assert!(!find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn the_active_tab_of_an_unfocused_window_becomes_unread_when_it_needs_input() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            false,
-            Some("session-1".to_string()),
-        ));
-
-        registry.apply_hook_event(hook("session-1", notification("Needs permission for Bash")));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn a_background_tab_of_a_focused_window_becomes_unread_when_it_needs_input() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            true,
-            Some("session-active".to_string()),
-        ));
-
-        registry.apply_hook_event(hook(
-            "session-background",
-            notification("Needs permission for Bash"),
-        ));
-
-        assert!(find(&registry.snapshot(), "session-background").unread);
-    }
-
-    #[test]
-    fn losing_focus_stops_a_windows_active_tab_from_suppressing_unread() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            true,
-            Some("session-1".to_string()),
-        ));
-
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            false,
-            Some("session-1".to_string()),
-        ));
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn forgetting_a_closed_window_stops_it_suppressing_unread() {
-        let (_clock, mut registry) = registry();
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            true,
-            Some("session-1".to_string()),
-        ));
-
-        registry.remove_window(WINDOW);
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
     /// One session file, as the scan hands it to the join.
     fn session_file(pid: u32, session_id: &str) -> SessionFile {
         SessionFile {
@@ -1603,7 +1426,7 @@ mod tests {
 
     /// Candidates are the reporting window's own sessions. Two branches of one
     /// piece of work produce the same summary often enough that an unscoped
-    /// match would clear the wrong window's unread.
+    /// match would name the wrong window's session.
     #[test]
     fn an_active_tab_label_never_identifies_a_session_in_another_window() {
         let (_clock, mut registry) = registry();
@@ -1661,171 +1484,6 @@ mod tests {
         assert_eq!(registry.current_session(), None);
     }
 
-    #[test]
-    fn a_reported_active_tab_in_a_focused_window_keeps_its_session_read() {
-        let (_clock, mut registry) = registry();
-        placed(
-            &mut registry,
-            &[
-                ("session-active", "Fix the auth flow", WINDOW),
-                ("session-sibling", "Rewrite the parser", WINDOW),
-            ],
-        );
-        registry.apply_window_focus(focus(WINDOW, true, Some("Fix the auth flow")));
-
-        registry.apply_hook_event(hook("session-active", HookEventKind::Stop));
-        registry.apply_hook_event(hook("session-sibling", HookEventKind::Stop));
-
-        let snapshot = registry.snapshot();
-
-        assert!(!find(&snapshot, "session-active").unread);
-        assert!(find(&snapshot, "session-sibling").unread);
-    }
-
-    /// The regression the two-facts split exists to prevent: the user is in a
-    /// browser, and the tab left in front of a window they are not looking at
-    /// must not silence anything.
-    #[test]
-    fn a_reported_active_tab_in_an_unfocused_window_does_not_keep_its_session_read() {
-        let (_clock, mut registry) = registry();
-        placed(&mut registry, &[("session-1", "Fix the auth flow", WINDOW)]);
-        registry.apply_window_focus(focus(WINDOW, false, Some("Fix the auth flow")));
-
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn a_window_reporting_focus_clears_unread_for_every_session_it_runs() {
-        let (_clock, mut registry) = registry();
-        placed(
-            &mut registry,
-            &[
-                ("session-active", "Fix the auth flow", WINDOW),
-                ("session-sibling", "Rewrite the parser", WINDOW),
-            ],
-        );
-        registry.apply_hook_event(hook("session-active", HookEventKind::Stop));
-        registry.apply_hook_event(hook("session-sibling", HookEventKind::Stop));
-
-        registry.apply_window_focus(focus(WINDOW, true, Some("Fix the auth flow")));
-
-        let snapshot = registry.snapshot();
-
-        assert!(!find(&snapshot, "session-active").unread);
-        assert!(!find(&snapshot, "session-sibling").unread);
-    }
-
-    /// The state a person working in their editor is in nearly all of the time:
-    /// the window is in front of them and the thing in front of it is a source
-    /// file, so the window truthfully reports no Claude tab at all. Clearing on
-    /// the active tab alone left every mark standing through this.
-    #[test]
-    fn a_window_reporting_focus_with_no_claude_tab_in_front_still_clears_its_unread() {
-        let (_clock, mut registry) = registry();
-        placed(
-            &mut registry,
-            &[
-                ("session-1", "Fix the auth flow", WINDOW),
-                ("session-2", "Rewrite the parser", WINDOW),
-            ],
-        );
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-        registry.apply_hook_event(hook("session-2", HookEventKind::Stop));
-
-        registry.apply_window_focus(focus(WINDOW, true, None));
-
-        let snapshot = registry.snapshot();
-
-        assert!(!find(&snapshot, "session-1").unread);
-        assert!(!find(&snapshot, "session-2").unread);
-    }
-
-    /// Reading a window is scoped to the window. Focus arriving anywhere else
-    /// says nothing about the sessions the user has not gone to.
-    #[test]
-    fn a_window_reporting_focus_leaves_another_windows_unread_alone() {
-        let (_clock, mut registry) = registry();
-        placed(
-            &mut registry,
-            &[
-                ("session-here", "Fix the auth flow", WINDOW),
-                ("session-there", "Rewrite the parser", OTHER_WINDOW),
-            ],
-        );
-        registry.apply_hook_event(hook("session-there", HookEventKind::Stop));
-
-        registry.apply_window_focus(focus(WINDOW, true, None));
-
-        assert!(find(&registry.snapshot(), "session-there").unread);
-    }
-
-    /// A window in the background is not somewhere the user has arrived, and a
-    /// report saying so must clear nothing — the case the whole app exists for
-    /// is a session finishing in a window nobody is looking at.
-    #[test]
-    fn a_window_reporting_no_focus_clears_nothing_it_runs() {
-        let (_clock, mut registry) = registry();
-        placed(&mut registry, &[("session-1", "Fix the auth flow", WINDOW)]);
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        registry.apply_window_focus(focus(WINDOW, false, None));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
-    /// Without the extension nothing places a session in a window, and a
-    /// session nothing places is one no report can reach. Clicking it in the
-    /// popover stays the only way it is ever cleared.
-    #[test]
-    fn a_session_no_window_runs_is_left_unread_by_a_report_from_one() {
-        let (_clock, mut registry) = registry();
-        placed(
-            &mut registry,
-            &[("session-placed", "Fix the auth flow", WINDOW)],
-        );
-        registry.apply_hook_event(hook("session-unplaced", HookEventKind::Stop));
-
-        registry.apply_window_focus(focus(WINDOW, true, None));
-
-        assert!(find(&registry.snapshot(), "session-unplaced").unread);
-    }
-
-    /// A scan is not the user arriving anywhere. Re-matching the tab labels
-    /// runs on every one of them, so a sweep placed there would take back an
-    /// unread within a scan of raising it, and a session that finished behind
-    /// the tab in front would never be announced at all.
-    #[test]
-    fn a_scan_after_a_focused_window_was_read_leaves_a_new_unread_standing() {
-        let (_clock, mut registry) = registry();
-        placed(
-            &mut registry,
-            &[
-                ("session-active", "Fix the auth flow", WINDOW),
-                ("session-sibling", "Rewrite the parser", WINDOW),
-            ],
-        );
-        registry.apply_window_focus(focus(WINDOW, true, Some("Fix the auth flow")));
-        registry.apply_hook_event(hook("session-sibling", HookEventKind::Stop));
-
-        titled(&mut registry, "session-active", "Fix the auth flow");
-
-        assert!(find(&registry.snapshot(), "session-sibling").unread);
-    }
-
-    #[test]
-    fn a_window_reporting_focus_loss_stops_suppressing_its_active_tab() {
-        let (_clock, mut registry) = registry();
-        placed(&mut registry, &[("session-1", "Fix the auth flow", WINDOW)]);
-        registry.apply_window_focus(focus(WINDOW, true, Some("Fix the auth flow")));
-
-        registry.apply_window_focus(focus(WINDOW, false, Some("Fix the auth flow")));
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
     /// A title reaching the registry from the transcript pass, which is a scan
     /// behind the tab that is already showing it.
     fn titled(registry: &mut SessionRegistry, session_id: &str, label: &str) {
@@ -1869,52 +1527,6 @@ mod tests {
         assert_eq!(registry.current_session(), Some("session-1"));
     }
 
-    /// The failure this exists to prevent: the session the user is watching
-    /// finishes, and because its tab could not be identified when it was
-    /// reported, it raises an unread and plays a sound in front of them.
-    #[test]
-    fn a_tab_identified_after_it_was_reported_keeps_its_session_from_notifying() {
-        let (_clock, mut registry) = registry();
-        placed(&mut registry, &[("session-1", "Fix the auth flow", WINDOW)]);
-        registry.apply_window_focus(focus(WINDOW, true, Some("Rewrite the parser")));
-
-        titled(&mut registry, "session-1", "Rewrite the parser");
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert!(!find(&registry.snapshot(), "session-1").unread);
-    }
-
-    /// The sound cannot be taken back, but the unread can: the user is looking
-    /// at the tab, so it clears itself the moment AYDY can tell which session
-    /// it is.
-    #[test]
-    fn an_unread_raised_while_its_tab_was_unidentified_clears_once_it_is_identified() {
-        let (_clock, mut registry) = registry();
-        placed(&mut registry, &[("session-1", "Fix the auth flow", WINDOW)]);
-        registry.apply_window_focus(focus(WINDOW, true, Some("Rewrite the parser")));
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-        assert!(find(&registry.snapshot(), "session-1").unread);
-
-        titled(&mut registry, "session-1", "Rewrite the parser");
-
-        assert!(!find(&registry.snapshot(), "session-1").unread);
-    }
-
-    /// Matching a tab again says nothing about where the user is: a background
-    /// window whose tab becomes identifiable is still a background window.
-    #[test]
-    fn a_tab_identified_after_it_was_reported_by_an_unfocused_window_still_notifies() {
-        let (_clock, mut registry) = registry();
-        placed(&mut registry, &[("session-1", "Fix the auth flow", WINDOW)]);
-        registry.apply_window_focus(focus(WINDOW, false, Some("Rewrite the parser")));
-
-        titled(&mut registry, "session-1", "Rewrite the parser");
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        assert_eq!(registry.current_session(), None);
-        assert!(find(&registry.snapshot(), "session-1").unread);
-    }
-
     #[test]
     fn a_tab_identified_in_a_background_window_does_not_take_focus_from_the_focused_one() {
         let (_clock, mut registry) = registry();
@@ -1948,88 +1560,290 @@ mod tests {
     }
 
     #[test]
-    fn two_notifications_leave_the_session_unread_once() {
-        let (clock, mut registry) = registry();
-
-        registry.apply_hook_event(hook("session-1", notification("Needs permission for Bash")));
-        clock.advance(minutes(1));
-        registry.apply_hook_event(hook(
-            "session-1",
-            notification("Needs permission for Write"),
-        ));
-        registry.mark_read("session-1");
-
-        assert!(!find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
-    fn marking_a_session_read_clears_its_unread_state() {
-        let (_clock, mut registry) = registry();
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-
-        registry.mark_read("session-1");
-
-        assert!(!find(&registry.snapshot(), "session-1").unread);
-    }
-
-    #[test]
     fn marking_an_unknown_session_id_read_does_nothing() {
         let (_clock, mut registry) = registry();
 
-        registry.mark_read("session-never-seen");
+        registry.mark_read("session-never-seen", NOW_MS);
+
+        assert_eq!(registry.snapshot().session_count, 0);
+    }
+
+    /// A wall-clock instant the status and seen tests are dated against.
+    const NOW_MS: u64 = 1_790_000_000_000;
+
+    const HOUR_MS: u64 = 60 * 60 * 1000;
+
+    /// A registry whose monotonic clock is far enough from its origin that a
+    /// record dated hours back can be placed exactly.
+    fn dated_registry() -> (Arc<TestClock>, SessionRegistry) {
+        let (clock, registry) = registry();
+        clock.advance(Duration::from_secs(24 * 60 * 60));
+
+        (clock, registry)
+    }
+
+    fn status(session_id: &str, kind: HookEventKind, written_at_ms: u64) -> StatusRecord {
+        StatusRecord {
+            event: hook(session_id, kind),
+            written_at_ms,
+        }
+    }
+
+    fn is_unread(registry: &mut SessionRegistry, session_id: &str) -> bool {
+        find(&registry.snapshot(), session_id).unread
+    }
+
+    #[test]
+    fn a_stop_is_unread_until_a_newer_seen_time_arrives() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 1_000),
+            NOW_MS,
+        );
+        assert!(is_unread(&mut registry, "session-1"));
+
+        registry.apply_seen("session-1", NOW_MS - 2_000);
+        assert!(is_unread(&mut registry, "session-1"));
+
+        registry.apply_seen("session-1", NOW_MS);
+        assert!(!is_unread(&mut registry, "session-1"));
+    }
+
+    #[test]
+    fn a_notification_is_unread_until_a_newer_seen_time_arrives() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status(
+                "session-1",
+                notification("Needs permission"),
+                NOW_MS - 1_000,
+            ),
+            NOW_MS,
+        );
+        assert!(is_unread(&mut registry, "session-1"));
+
+        registry.apply_seen("session-1", NOW_MS - 2_000);
+        assert!(is_unread(&mut registry, "session-1"));
+
+        registry.apply_seen("session-1", NOW_MS);
+        assert!(!is_unread(&mut registry, "session-1"));
+    }
+
+    #[test]
+    fn an_older_seen_time_does_not_replace_a_newer_one() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 1_000),
+            NOW_MS,
+        );
+        registry.apply_seen("session-1", NOW_MS);
+
+        registry.apply_seen("session-1", NOW_MS - 5_000);
+
+        assert!(!is_unread(&mut registry, "session-1"));
+    }
+
+    #[test]
+    fn seeing_an_unknown_session_does_nothing() {
+        let (_clock, mut registry) = dated_registry();
+
+        registry.apply_seen("session-never-seen", NOW_MS);
 
         assert_eq!(registry.snapshot().session_count, 0);
     }
 
     #[test]
-    fn a_window_gaining_focus_clears_unread_for_its_active_tab_only() {
-        let (_clock, mut registry) = registry();
-        registry.apply_hook_event(hook("session-active", HookEventKind::Stop));
-        registry.apply_hook_event(hook("session-sibling", HookEventKind::Stop));
+    fn a_session_start_or_a_prompt_is_never_unread() {
+        let (_clock, mut registry) = dated_registry();
 
-        registry.apply_focus_report(FocusReport::new(
-            WINDOW,
-            true,
-            Some("session-active".to_string()),
-        ));
+        registry.apply_status(
+            status("session-start", HookEventKind::SessionStart, NOW_MS - 1_000),
+            NOW_MS,
+        );
+        registry.apply_status(
+            status(
+                "session-prompt",
+                HookEventKind::UserPromptSubmit,
+                NOW_MS - 1_000,
+            ),
+            NOW_MS,
+        );
 
-        let snapshot = registry.snapshot();
+        assert!(!is_unread(&mut registry, "session-start"));
+        assert!(!is_unread(&mut registry, "session-prompt"));
+    }
 
-        assert!(!find(&snapshot, "session-active").unread);
-        assert!(find(&snapshot, "session-sibling").unread);
+    /// The rule the VS Code extension applies: only the last event counts, so a
+    /// prompt withdraws attention with no seen file at all.
+    #[test]
+    fn only_the_last_event_decides_unread_as_in_the_extension() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 3_000),
+            NOW_MS,
+        );
+
+        registry.apply_status(
+            status("session-1", HookEventKind::UserPromptSubmit, NOW_MS - 2_000),
+            NOW_MS,
+        );
+        assert!(!is_unread(&mut registry, "session-1"));
+
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 1_000),
+            NOW_MS,
+        );
+        assert!(is_unread(&mut registry, "session-1"));
+
+        registry.apply_status(
+            status("session-1", HookEventKind::SessionStart, NOW_MS),
+            NOW_MS,
+        );
+        assert!(!is_unread(&mut registry, "session-1"));
     }
 
     #[test]
-    fn a_window_gaining_focus_with_an_unidentified_active_tab_clears_nothing() {
+    fn marking_read_clears_unread_until_a_later_stop() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 1_000),
+            NOW_MS,
+        );
+
+        registry.mark_read("session-1", NOW_MS);
+        assert!(!is_unread(&mut registry, "session-1"));
+
+        registry.apply_status(
+            status("session-1", HookEventKind::UserPromptSubmit, NOW_MS + 1_000),
+            NOW_MS + 1_000,
+        );
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS + 2_000),
+            NOW_MS + 2_000,
+        );
+        assert!(is_unread(&mut registry, "session-1"));
+    }
+
+    /// Hook events arriving the old way no longer raise unread: the status
+    /// records are its only source.
+    #[test]
+    fn a_hook_event_does_not_raise_unread() {
         let (_clock, mut registry) = registry();
+
         registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
 
-        registry.apply_focus_report(FocusReport::new(WINDOW, true, None));
-
-        assert!(find(&registry.snapshot(), "session-1").unread);
+        assert!(!is_unread(&mut registry, "session-1"));
     }
 
     #[test]
-    fn unread_clears_only_through_a_click_or_through_focus() {
-        let (clock, mut registry) = registry();
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
+    fn unread_stands_through_scans_enrichment_resumes_and_ticks() {
+        let (clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 1_000),
+            NOW_MS,
+        );
 
         clock.advance(minutes(30));
         registry.apply_reconciliation(ReconciliationResult {
             present: vec![DiscoveredSession::new("session-1").with_status(SessionStatus::Done)],
             gone: Vec::new(),
         });
-        registry.apply_enrichment(
-            "session-1",
-            SessionEnrichment {
-                label: Some("Review the mock data".to_string()),
-                ..SessionEnrichment::default()
-            },
-        );
+        titled(&mut registry, "session-1", "Review the mock data");
         registry.apply_resume("session-1");
         registry.tick();
 
-        assert!(find(&registry.snapshot(), "session-1").unread);
+        assert!(is_unread(&mut registry, "session-1"));
+    }
+
+    #[test]
+    fn the_snapshot_counts_tracked_and_unread_sessions() {
+        let (_clock, mut registry) = dated_registry();
+
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 1_000),
+            NOW_MS,
+        );
+        registry.apply_status(
+            status(
+                "session-2",
+                notification("Needs permission"),
+                NOW_MS - 1_000,
+            ),
+            NOW_MS,
+        );
+        registry.apply_status(
+            status("session-3", HookEventKind::UserPromptSubmit, NOW_MS - 1_000),
+            NOW_MS,
+        );
+        registry.apply_seen("session-2", NOW_MS);
+
+        let snapshot = registry.snapshot();
+
+        assert_eq!(snapshot.session_count, 3);
+        assert_eq!(snapshot.unread_count, 1);
+    }
+
+    /// Records are placed at the time they were written, not the order they
+    /// were read in.
+    #[test]
+    fn sessions_are_ordered_by_when_their_records_were_written() {
+        let (_clock, mut registry) = dated_registry();
+
+        registry.apply_status(
+            status("session-newer", HookEventKind::Stop, NOW_MS - HOUR_MS),
+            NOW_MS,
+        );
+        registry.apply_status(
+            status("session-older", HookEventKind::Stop, NOW_MS - 2 * HOUR_MS),
+            NOW_MS,
+        );
+        enrich(&mut registry, "session-newer", "aydy", "main");
+        enrich(&mut registry, "session-older", "aydy", "main");
+
+        assert_eq!(
+            ids(&registry.snapshot()),
+            ["session-newer", "session-older"]
+        );
+    }
+
+    #[test]
+    fn a_turn_recorded_ten_minutes_ago_has_ten_minutes_of_working_time() {
+        let (_clock, mut registry) = dated_registry();
+
+        registry.apply_status(
+            status(
+                "session-1",
+                HookEventKind::UserPromptSubmit,
+                NOW_MS - 10 * 60 * 1000,
+            ),
+            NOW_MS,
+        );
+
+        assert_eq!(
+            find(&registry.snapshot(), "session-1").working_time,
+            minutes(10)
+        );
+    }
+
+    /// A clock that has run ahead of this machine's says nothing about when
+    /// the event happened, so it lands at now rather than in the future.
+    #[test]
+    fn a_record_dated_in_the_future_lands_at_now() {
+        let (_clock, mut registry) = dated_registry();
+
+        registry.apply_status(
+            status(
+                "session-1",
+                HookEventKind::UserPromptSubmit,
+                NOW_MS + HOUR_MS,
+            ),
+            NOW_MS,
+        );
+
+        assert_eq!(
+            find(&registry.snapshot(), "session-1").working_time,
+            Duration::ZERO
+        );
     }
 
     #[test]
@@ -2468,20 +2282,6 @@ mod tests {
 
         assert_eq!(session.entrypoint.as_deref(), Some("claude-vscode"));
         assert!(session.jumpable);
-    }
-
-    #[test]
-    fn the_snapshot_counts_tracked_and_unread_sessions() {
-        let (clock, mut registry) = registry();
-
-        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
-        clock.advance(minutes(1));
-        registry.apply_hook_event(hook("session-2", HookEventKind::UserPromptSubmit));
-
-        let snapshot = registry.snapshot();
-
-        assert_eq!(snapshot.session_count, 2);
-        assert_eq!(snapshot.unread_count, 1);
     }
 
     #[test]

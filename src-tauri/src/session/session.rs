@@ -34,7 +34,12 @@ pub struct Session {
     /// never that a window was ruled out — so the reveal that would open a
     /// duplicate session is never sent.
     pub window: Option<WindowId>,
-    pub unread: bool,
+    /// When the session's last event, if it was a `Stop` or `Notification`,
+    /// was recorded, in epoch ms. Any other event clears it.
+    pub attention_at_ms: Option<u64>,
+    /// When the session was last looked at, in epoch ms, from its seen file or
+    /// a click on its row.
+    pub seen_at_ms: Option<u64>,
     /// The message from the most recent `Notification`, describing what the
     /// session is waiting on. It is the only source for that detail.
     pub notification_message: Option<String>,
@@ -60,7 +65,8 @@ impl Session {
             branch: None,
             jumpable: false,
             window: None,
-            unread: false,
+            attention_at_ms: None,
+            seen_at_ms: None,
             notification_message: None,
             hook_tracked: false,
             last_event_at: now,
@@ -69,6 +75,13 @@ impl Session {
             unknown_since: Some(now),
             scan_confirmed: false,
         }
+    }
+
+    /// Whether the session wants the user back and they have not looked since:
+    /// its last event asked for attention after it was last seen. The VS Code
+    /// extension applies the same rule, so the two counts agree.
+    pub fn unread(&self) -> bool {
+        matches!((self.attention_at_ms, self.seen_at_ms.unwrap_or(0)), (Some(a), s) if a > s)
     }
 
     /// The status these facts imply.
