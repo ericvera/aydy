@@ -328,63 +328,50 @@ running — no moment to suggest an improvement to how well it works.
 
 ## Setup: the screen before there is a list
 
-AYDY cannot see a single session until it has written hooks into
-`~/.claude/settings.json`, so the first thing it ever shows is a request to edit
-a file it does not own. The screen appears **whenever the hooks are absent**,
-not only on the first launch: a user who removed them by hand gets it back
-rather than an empty list that would look like a bug.
+AYDY cannot see a single session until the VS Code extension has put its hook
+script in place and registered its hooks in `~/.claude/settings.json`. **The app
+installs nothing itself** — the extension writes both, and records sessions even
+while the app is closed. The screen appears **whenever tracking is not
+installed**, not only on the first launch: an uninstalled extension, or hooks
+removed by hand, put it back rather than leaving an empty list that would look
+like a bug.
 
-- **It explains, then asks.** It states how many hooks go in, which file they go
-  in, and that everything else in that file is left untouched — then asks. A
-  **Show me the change first** action renders the installer's own plan: the
-  hooks to be added with how each runs and its timeout, the entries to be
-  removed, and the `hooks` block exactly as it will be written.
-- **The hook count is the installer's**, never copy. It is counted from what
-  will actually be registered, so registering a sixth hook changes the sentence
-  by itself. Five is the number today and it is nowhere in the interface.
-- **What will be removed is named before the button, not after it.** Installing
-  takes over the `Stop` and `Notification` hooks that play a sound, and deleting
-  configuration the user wrote is the most consequential thing this app does.
-  Each entry is listed by its event and the command it runs, with the reason
-  (AYDY plays those sounds itself, so you do not hear both) and the way out (its
-  sounds can be turned off afterwards). It is a warning banner above the
-  install, never a footnote below it.
-- **A failed write leads with the reassurance.** Every failure path leaves the
-  settings file untouched — the write is atomic and aborts before it starts if
-  the file changed underneath it — so the banner opens with **Nothing in
-  ~/.claude/settings.json was modified**, then the reason, then **Try again**
-  and **Reveal file**.
-- **What failed decides what Try again does, and nothing installs from a change
-  that was never planned.** Planning is its own read and it has its own failure
-  — the app has to know the listener's port before it can plan, and a popover
-  opened while the listener is still binding gets a plan that timed out. With
-  no plan there is no hook count, no removal warning, and nothing has named the
-  entries an install would delete, so **Try again** plans again rather than
-  writing. The screen offers no action that installs until the plan exists.
-- **A settings file that cannot be read at all gets a screen of its own.** Then
-  AYDY cannot say whether its hooks are there, so neither the first-run screen
-  nor the list is honest — and a failure that nothing renders would leave an
-  empty popover that never reads the file again. It states that nothing was
-  modified, gives the reason, and offers the same **Try again** and **Reveal
-  file**.
-- **There is no way to settings, and no footer.** Installing the hooks is the
-  only thing that can be done until they exist, so the screen carries no gear
-  and no quit. Quit stays on the session list, which is the only screen in the
-  mocks that has a footer.
-- **The path is written the way the user writes it**, `~/.claude/settings.json`
-  rather than an absolute path with their name in it, and it comes from the
-  installer — so a `CLAUDE_CONFIG_DIR` pointing somewhere else is shown as it
-  is.
+It has three states, all under a header titled **Setup**:
+
+- **Never installed** (no hook script). It says **Install the AYDY extension in
+  VS Code**, explains that the extension tracks sessions even while this app is
+  closed and AYDY shows what it records, and offers **Show me how**. A note
+  under it says that an extension already installed only needs any VS Code
+  window opened.
+- **Show me how** reveals the steps inline, on the same screen: open the
+  Command Palette, run **Extensions: Install from VSIX…**, choose
+  **aydy-companion.vsix**, open any project window.
+- **Hooks missing** (script present, hook entries gone). It says **AYDY's hooks
+  are missing**, that sessions are not being recorded, and that opening any VS
+  Code window has the extension put them back. There is nothing to press.
+
+- **It clears by itself.** While tracking is not installed the app checks
+  every two seconds, and the list replaces the screen as soon as the files
+  appear. Once installed the checking stops, and it is asked again each time
+  the popover opens and each time settings opens — the popover is never torn
+  down, so an extension uninstalled later is noticed the next time anyone
+  looks.
+- **Nothing is shown until the first answer.** Guessing would flash the wrong
+  screen for a frame.
+- **There is no way to settings, and no footer.** Installing the extension is
+  the only thing that can be done until tracking exists, so the screen carries
+  no gear and no quit. Quit stays on the session list, which is the only screen
+  that has a footer.
 
 ## Settings
 
 One screen inside the popover — not a window, not a sheet. It is reached from
 the gear in the list header and left by the ✕ in its own, and those are the only
-two ways in and out. The screens that ask for the hooks carry a header of their
-own — the same shared one — but **no gear in it**, so there is nothing to reach
-settings from until the hooks exist: installing them is still the only thing
+two ways in and out. The install screen carries a header of its own — the same
+shared one — but **no gear in it**, so there is nothing to reach settings from
+until tracking is installed: installing the extension is still the only thing
 that can be done. The gear is passed into the shared header by the list, never
-built into it, or hoisting the header would carry the gear onto those screens
+built into it, or hoisting the header would carry the gear onto that screen
 with it.
 
 **It renders and sends; it does not decide.** Every command answers with the

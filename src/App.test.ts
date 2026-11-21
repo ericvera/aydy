@@ -2,10 +2,9 @@ import { aSession, renderedText } from '@/test'
 import type { VueWrapper } from '@vue/test-utils'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 
 import type { ExtensionStatus } from './types/ExtensionStatus'
-import type { HookPreview } from './types/HookPreview'
 import type { JumpOutcome } from './types/JumpOutcome'
 import type { HookStatus } from './types/HookStatus'
 import type { PortMove } from './types/PortMove'
@@ -13,6 +12,7 @@ import type { SessionGroup } from './types/SessionGroup'
 import type { SessionList } from './types/SessionList'
 import type { Settings } from './types/Settings'
 import type { StaleList } from './types/StaleList'
+import type { TrackingStatus } from './types/TrackingStatus'
 
 interface FakeChannel {
   onmessage: (list: SessionList) => void
@@ -32,12 +32,7 @@ const ABSENT: HookStatus = {
   receivingEvents: false,
 }
 
-const PREVIEW: HookPreview = {
-  hookCount: 5,
-  added: [{ event: 'Stop', kind: 'http', timeoutSeconds: 2 }],
-  removed: [],
-  hooksJson: '{}',
-}
+const TRACKING: TrackingStatus = { state: 'installed' }
 
 const SETTINGS: Settings = {
   finishedSound: true,
@@ -51,6 +46,7 @@ interface Invocation {
 }
 
 interface Answers {
+  tracking: TrackingStatus
   hooks: HookStatus
   settings: Settings
   extension: ExtensionStatus
@@ -63,6 +59,7 @@ const { channels, invoked, answers } = vi.hoisted(
     channels: [],
     invoked: [],
     answers: {
+      tracking: { state: 'installed' },
       hooks: {
         installed: true,
         hookCount: 5,
@@ -99,12 +96,12 @@ vi.mock('@tauri-apps/api/core', () => ({
       throw answers.fails[command]
     }
 
-    if (command === 'hook_status') {
-      return answers.hooks
+    if (command === 'tracking_status') {
+      return answers.tracking
     }
 
-    if (command === 'preview_hook_install') {
-      return PREVIEW
+    if (command === 'hook_status') {
+      return answers.hooks
     }
 
     if (command === 'extension_status') {
@@ -165,16 +162,27 @@ const notJumpable: SessionGroup = {
   ],
 }
 
+const mounted: VueWrapper[] = []
+
+// Unmounting stops the tracking poll, which would otherwise fire into a later
+// test's invocations.
+afterEach(() => {
+  for (const wrapper of mounted.splice(0)) {
+    wrapper.unmount()
+  }
+})
+
 /**
- * Mounts the popover and lets it subscribe and read the hook status.
+ * Mounts the popover and lets it subscribe and read the tracking status.
  */
 const popover = async (
-  hooks: HookStatus = INSTALLED,
+  tracking: TrackingStatus = TRACKING,
   fails: Record<string, unknown> = {},
 ): Promise<VueWrapper> => {
   channels.length = 0
   invoked.length = 0
-  answers.hooks = hooks
+  answers.tracking = tracking
+  answers.hooks = INSTALLED
   answers.settings = SETTINGS
   answers.extension = { connected: false, windowCount: 0 }
   answers.jump = 'jumped'
@@ -184,6 +192,7 @@ const popover = async (
 
   const App = (await import('./App.vue')).default
   const wrapper = mount(App)
+  mounted.push(wrapper)
   await flushPromises()
 
   return wrapper
@@ -193,7 +202,7 @@ const popover = async (
  * Mounts the popover, lets it subscribe, and pushes one snapshot into it.
  */
 const showing = async (snapshot: SessionList): Promise<VueWrapper> => {
-  const wrapper = await popover(INSTALLED)
+  const wrapper = await popover()
 
   channels[0]?.onmessage(snapshot)
   await nextTick()
@@ -293,7 +302,7 @@ it('marks a session read when its row is clicked', async () => {
 
   expect(invoked).toStrictEqual([
     { command: 'subscribe_sessions', args: { channel: channels[0] } },
-    { command: 'hook_status', args: undefined },
+    { command: 'tracking_status', args: undefined },
     { command: 'mark_read', args: { sessionId: 'a' } },
     { command: 'jump_to_session', args: { sessionId: 'a' } },
     { command: 'close_popover', args: undefined },
@@ -315,7 +324,7 @@ it('leaves the popover open when a row that cannot be jumped to is clicked', asy
 
   expect(invoked).toStrictEqual([
     { command: 'subscribe_sessions', args: { channel: channels[0] } },
-    { command: 'hook_status', args: undefined },
+    { command: 'tracking_status', args: undefined },
     { command: 'mark_read', args: { sessionId: 'd' } },
   ])
 })
@@ -337,7 +346,7 @@ it('leaves the popover open and says nothing when a jump found no window', async
 
   expect(invoked.map((call) => call.command)).toStrictEqual([
     'subscribe_sessions',
-    'hook_status',
+    'tracking_status',
     'mark_read',
     'jump_to_session',
   ])
@@ -476,57 +485,104 @@ it('quits from the footer', async () => {
 
   expect(invoked.map((call) => call.command)).toStrictEqual([
     'subscribe_sessions',
-    'hook_status',
+    'tracking_status',
     'quit',
   ])
 })
 
 /**
- * Whenever the hooks are absent — not only on the very first launch — the app
- * asks for them, because a list it cannot fill is not an honest empty list.
+ * Whenever tracking is not installed — not only on the very first launch — the
+ * app asks for the extension, because a list nothing fills is not an honest
+ * empty list.
  */
-it('shows the first-run screen when the hooks are absent', async () => {
-  const wrapper = await popover(ABSENT)
+it('shows the install screen and no list when tracking is not installed', async () => {
+  const wrapper = await popover({ state: 'notInstalled' })
 
   expect(renderedText(wrapper.element)).toContain(
-    'Track your Claude Code sessions',
+    'Install the AYDY extension in VS Code',
   )
   expect(wrapper.findComponent({ name: 'SessionList' }).exists()).toBe(false)
   expect(wrapper.findComponent({ name: 'EmptyState' }).exists()).toBe(false)
 })
 
-it('shows the session list and not the first-run screen once the hooks exist', async () => {
+it('says the hooks are missing when the extension is there without them', async () => {
+  const wrapper = await popover({ state: 'hooksMissing' })
+
+  expect(renderedText(wrapper.element)).toContain("AYDY's hooks are missing")
+  expect(wrapper.findComponent({ name: 'EmptyState' }).exists()).toBe(false)
+})
+
+it('shows the session list and not the install screen once tracking is installed', async () => {
   const wrapper = await showing(list(1, 0, [okvenMain]))
 
-  expect(wrapper.findComponent({ name: 'FirstRun' }).exists()).toBe(false)
+  expect(wrapper.findComponent({ name: 'InstallExtension' }).exists()).toBe(
+    false,
+  )
   expect(wrapper.findComponent({ name: 'SessionList' }).exists()).toBe(true)
 })
 
 /**
- * Installing the hooks is the only action available until they exist: the
- * first-run screen offers no settings, and no quit either.
+ * Installing the extension is the only thing that can be done until tracking
+ * exists: the install screen offers no settings, and no quit either.
  */
-it('offers nothing but the install on the first-run screen', async () => {
-  const wrapper = await popover(ABSENT)
+it('offers nothing but the install on the install screen', async () => {
+  const wrapper = await popover({ state: 'notInstalled' })
 
   expect(wrapper.find('footer').exists()).toBe(false)
   expect(renderedText(wrapper.element)).not.toContain('Quit')
-  expect(renderedText(wrapper.element)).not.toContain('Settings')
+  expect(wrapper.find('[aria-label="Settings"]').exists()).toBe(false)
+})
+
+/** The screen clears by itself once the extension's files appear. */
+it('moves from the install screen to the list once tracking appears', async () => {
+  vi.useFakeTimers()
+
+  try {
+    const wrapper = await popover({ state: 'notInstalled' })
+
+    answers.tracking = { state: 'installed' }
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(wrapper.findComponent({ name: 'InstallExtension' }).exists()).toBe(
+      false,
+    )
+    expect(wrapper.findComponent({ name: 'EmptyState' }).exists()).toBe(true)
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 /**
- * Neither screen is right until the settings file has been read, and flashing
- * the wrong one is worse than showing nothing for a frame.
+ * Polling stops once tracking is installed and the popover is never unmounted,
+ * so opening it is what notices the extension was uninstalled since.
  */
-it('shows neither screen until the settings file has been read', async () => {
+it('brings the install screen back when the popover regains focus without tracking', async () => {
+  const wrapper = await showing(list(1, 0, [okvenMain]))
+
+  answers.tracking = { state: 'notInstalled' }
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+
+  expect(wrapper.findComponent({ name: 'InstallExtension' }).exists()).toBe(
+    true,
+  )
+  expect(wrapper.findComponent({ name: 'SessionList' }).exists()).toBe(false)
+})
+
+/**
+ * Neither screen is right until tracking has been read, and flashing the wrong
+ * one is worse than showing nothing for a frame.
+ */
+it('shows neither screen until tracking has been read', async () => {
   channels.length = 0
   invoked.length = 0
-  answers.hooks = INSTALLED
+  answers.tracking = TRACKING
   answers.fails = {}
   vi.resetModules()
 
   const App = (await import('./App.vue')).default
   const wrapper = mount(App)
+  mounted.push(wrapper)
 
   expect(renderedText(wrapper.element)).toBe('')
 
@@ -589,48 +645,12 @@ it('heads the stale list with the state rather than a count that has drained awa
 })
 
 /**
- * A settings file that could not be read at all leaves the app unable to say
- * whether its hooks are there, so neither screen can be shown — but the failure
- * has to be, or the popover is an empty shell with no way to read it again.
+ * The stale treatment cannot apply before tracking exists: nothing is being
+ * recorded then, so nothing is being lost, and a fresh install would otherwise
+ * present itself as broken.
  */
-it('shows the failure when the settings file could not be read at all', async () => {
-  const wrapper = await popover(ABSENT, {
-    hook_status: { reason: 'The file could not be read.' },
-  })
-
-  expect(renderedText(wrapper.element)).toContain(
-    'AYDY cannot read your settings',
-  )
-  expect(renderedText(wrapper.element)).toContain('The file could not be read.')
-  expect(wrapper.findComponent({ name: 'FirstRun' }).exists()).toBe(false)
-  expect(wrapper.findComponent({ name: 'SessionList' }).exists()).toBe(false)
-})
-
-it('reads the settings file again when that failure is retried', async () => {
-  const wrapper = await popover(ABSENT, {
-    hook_status: { reason: 'The file could not be read.' },
-  })
-  answers.fails = {}
-
-  await wrapper.get('button').trigger('click')
-  await flushPromises()
-
-  expect(invoked.map((call) => call.command)).toStrictEqual([
-    'subscribe_sessions',
-    'hook_status',
-    'hook_status',
-    'preview_hook_install',
-  ])
-  expect(wrapper.findComponent({ name: 'FirstRun' }).exists()).toBe(true)
-})
-
-/**
- * The stale treatment cannot apply before the hooks exist: nothing is being
- * sent then, so nothing is being lost, and a freshly installed app would
- * otherwise present itself as broken.
- */
-it('does not call the list stale before the hooks exist', async () => {
-  const wrapper = await popover(ABSENT)
+it('does not call the list stale before tracking is installed', async () => {
+  const wrapper = await popover({ state: 'notInstalled' })
 
   channels[0]?.onmessage(
     list(0, 0, [], { stale: { sessionCount: 3, lastSeenAgoMs: 360_000 } }),
@@ -641,7 +661,7 @@ it('does not call the list stale before the hooks exist', async () => {
     false,
   )
   expect(renderedText(wrapper.element)).toContain(
-    'Track your Claude Code sessions',
+    'Install the AYDY extension in VS Code',
   )
 })
 
@@ -669,16 +689,30 @@ it('opens settings from the list and goes back to it', async () => {
 })
 
 /**
- * Installing the hooks is the only thing that can be done until they exist. The
- * screen has a header — the same shared one every screen has — but no gear in
- * it, so there is nothing to reach settings from.
+ * The install screen has a header — the same shared one every screen has — but
+ * no gear in it, so there is nothing to reach settings from.
  */
-it('offers no way into settings before the hooks exist', async () => {
-  const wrapper = await popover(ABSENT)
+it('offers no way into settings before tracking is installed', async () => {
+  const wrapper = await popover({ state: 'hooksMissing' })
 
   expect(wrapper.find('header').exists()).toBe(true)
   expect(wrapper.find('[aria-label="Settings"]').exists()).toBe(false)
   expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(false)
+})
+
+/**
+ * Opening settings is a moment someone is looking, so tracking is asked again
+ * there as well.
+ */
+it('reads tracking again when settings opens', async () => {
+  const wrapper = await showing(list(0, 0))
+
+  await wrapper.get('[aria-label="Settings"]').trigger('click')
+  await flushPromises()
+
+  expect(
+    invoked.filter((call) => call.command === 'tracking_status'),
+  ).toHaveLength(2)
 })
 
 /**
@@ -724,11 +758,10 @@ it('sends a setting that moved in the pane to Rust', async () => {
 })
 
 /**
- * REQ-RESIL-7. Removing the hooks does not end the app: it goes back to asking
- * for them, which is the screen shown whenever they are absent. Leaving the
- * pane up would leave a screen managing hooks that are no longer there.
+ * REQ-RESIL-7. Removing the hooks does not end the app, and the pane closes
+ * rather than staying up to manage hooks that are no longer there.
  */
-it('returns to the first-run screen when the hooks are removed, without quitting', async () => {
+it('closes the pane when the hooks are removed, without quitting', async () => {
   const wrapper = await showing(list(0, 0))
   await wrapper.get('[aria-label="Settings"]').trigger('click')
   await flushPromises()
@@ -740,7 +773,6 @@ it('returns to the first-run screen when the hooks are removed, without quitting
   expect(invoked.map((call) => call.command)).toContain('uninstall_hooks')
   expect(invoked.map((call) => call.command)).not.toContain('quit')
   expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(false)
-  expect(wrapper.findComponent({ name: 'FirstRun' }).exists()).toBe(true)
 })
 
 /**
@@ -750,7 +782,7 @@ it('returns to the first-run screen when the hooks are removed, without quitting
  * still installed and the banner saying the file was left alone never appeared.
  */
 it('keeps the pane up, with the reason, when the removal failed', async () => {
-  const wrapper = await popover(INSTALLED, {
+  const wrapper = await popover(TRACKING, {
     uninstall_hooks: { reason: 'The file changed while AYDY was writing it.' },
   })
   await wrapper.get('[aria-label="Settings"]').trigger('click')
@@ -762,7 +794,6 @@ it('keeps the pane up, with the reason, when the removal failed', async () => {
   const rendered = renderedText(wrapper.element)
 
   expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(true)
-  expect(wrapper.findComponent({ name: 'FirstRun' }).exists()).toBe(false)
   expect(rendered).toContain('Nothing in ~/.claude/settings.json was modified.')
   expect(rendered).toContain('The file changed while AYDY was writing it.')
 })
@@ -775,6 +806,9 @@ it('keeps the pane up, with the reason, when the removal failed', async () => {
  */
 it('reads the hook status again each time settings opens', async () => {
   const wrapper = await showing(list(0, 0))
+  await wrapper.get('[aria-label="Settings"]').trigger('click')
+  await flushPromises()
+  await wrapper.get('[aria-label="Close settings"]').trigger('click')
 
   answers.hooks = { ...INSTALLED, receivingEvents: false }
   await wrapper.get('[aria-label="Settings"]').trigger('click')
@@ -799,28 +833,4 @@ it('repairs the hooks from the pane and reads the file back', async () => {
     'hook_status',
   ])
   expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(true)
-})
-
-/**
- * The pane is left behind as well as hidden. Installing the hooks again from
- * the first-run screen returns to the list, which is where a user who has just
- * set the app up expects to land — not back inside the settings they were in
- * several steps ago.
- */
-it('does not come back to settings when the hooks are installed again', async () => {
-  const wrapper = await showing(list(0, 0))
-  await wrapper.get('[aria-label="Settings"]').trigger('click')
-  await flushPromises()
-
-  answers.hooks = ABSENT
-  await pressLabelled(wrapper, 'Remove hooks')
-  await flushPromises()
-
-  answers.hooks = INSTALLED
-  await pressLabelled(wrapper, 'Install hooks')
-  await flushPromises()
-
-  expect(wrapper.findComponent({ name: 'SettingsPane' }).exists()).toBe(false)
-  expect(wrapper.findComponent({ name: 'FirstRun' }).exists()).toBe(false)
-  expect(wrapper.find('[aria-label="Settings"]').exists()).toBe(true)
 })
