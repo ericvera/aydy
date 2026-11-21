@@ -48,15 +48,17 @@ None match.
 - Remove `window` from `JumpTarget`. Delete `IdeLocks`, `WindowFolders` and `JumpWatch`, and every use of `ExtensionCommands`.
 - Add `pub fn with_launch_cwd(self, sessions_dir: Option<&Path>, processes: &dyn ProcessTable) -> Self` to `JumpTarget`. When `sessions_dir` is `Some` and `session_files::read_all` succeeds, it looks for a file whose `session_id` equals the target's, whose `pid` `processes.is_alive`, and whose `cwd` is `Some`, and replaces `self.cwd` with that `cwd`. In every other case (no dir, unreadable dir, no matching live file, a file without `cwd`) it returns the target unchanged, so the registry's `session.cwd` is the fallback. Doc it with the reason above.
 - `Jumper::new(raiser: Arc<dyn WindowRaiser>, requests: JumpRequests)`, where `JumpRequests` is a small struct holding the dir, a timeout (3 s), a grace period (1 s) and a poll interval (50 ms). Tests use short values.
+- `JumpRequests::budget()` is `timeout + grace` (4 s in production): the longest the app ever waits for a reply. Task 02_06's responder uses the same 4 s figure to skip replying to a request the app has stopped waiting for.
 - `Jumper::jump(target)`:
   1. If `!raiser.available()` or `target.cwd` is None, return `NoWindow`.
-  2. Write the request atomically under a unique id (pid plus a counter plus epoch ms is enough, so no uuid dependency).
-  3. Poll for the reply until the timeout.
-  4. On a reply, read it, delete it, and parse it.
+  2. Sweep late replies: delete every `*.reply.json` in the jump dir whose mtime is older than `budget()`. Nobody is waiting for those, because a window wrote them after the app gave up. Ignore IO errors (a missing dir, a file another jump just deleted). Replies younger than the budget may belong to a jump in flight, so they stay.
+  3. Write the request atomically under a unique id (pid plus a counter plus epoch ms is enough, so no uuid dependency).
+  4. Poll for the reply until the timeout.
+  5. On a reply, read it, delete it, and parse it.
      - `reveal == "duplicated"` returns `Duplicated`.
      - Otherwise `raise(open)`. Ok returns `Jumped`. Err returns `Unanswered`, because the window could not be brought forward.
-  5. On timeout, `remove_file(request)`. `NotFound` means it was claimed late, so poll for the grace period, then return `Unanswered`. Any other result returns `Unanswered`.
-  6. A malformed reply returns `Unanswered`.
+  6. On timeout, `remove_file(request)`. `NotFound` means it was claimed late, so poll for the grace period, then return `Unanswered`. Any other result returns `Unanswered`.
+  7. A malformed reply returns `Unanswered`.
 - `lib.rs`:
   - Build `Jumper::new(Arc::new(CodeCli::default()), JumpRequests::new(data.jump_dir()))`.
   - Stop creating `JumpWatch` and stop passing it to `listener::server::run`.
@@ -71,7 +73,8 @@ None match.
 
 - Parse the reply's `reveal` as a plain string and compare it with `"duplicated"`. Do not import `RevealOutcome` from `crate::extension`.
 - The reply's `open` path comes from another process. Pass it to `CodeCli::raise` as a path argument only, as today, and never through a shell.
-- Delete the reply after reading it, and the request on timeout, so the jump dir does not grow.
+- Delete the reply after reading it, and the request on timeout, so the jump dir does not grow. A reply written after the app gave up is removed by the next jump's sweep.
+- The sweep only touches names ending in `.reply.json`, never a request file.
 - The frontend still knows `raised` and `unconfirmed`. Task 02_07 updates it, and the build stays green in between because the types are runtime strings.
 
 ## Verification
@@ -83,6 +86,7 @@ None match.
   - a late claim (request unlinked, reply written within the grace period) gives `Jumped`
   - no `code` CLI gives `NoWindow` and writes nothing
   - a malformed reply gives `Unanswered`
+  - sweep: a `*.reply.json` whose mtime is set older than the budget (use `File::set_modified`) is gone after the next `jump`, while a fresh `*.reply.json` and a request `*.json` that is not a reply are left in place
 - `with_launch_cwd` tests in `jump/mod.rs`, using a scratch sessions dir from `discovery::test_support::sessions_dir` and `FixedProcesses`:
   - a target whose `cwd` is `/a/.claude/worktrees/x`, with a live session file for its id whose `cwd` is `/a`, comes out with `cwd` `/a`
   - a matching file whose pid is dead, a file for another session id, a file without `cwd`, a `None` dir and a missing dir all leave `cwd` unchanged

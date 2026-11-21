@@ -16,7 +16,7 @@ The app learns about sessions by reading the status and seen files every half se
 
 - Task 02_02 produced `discovery/status_files.rs`: `read_statuses(dir) -> Vec<StatusRecord>`, `read_seen(dir) -> HashMap<String,u64>` and `DataDir`.
 - Task 02_03 produced `SessionRegistry::apply_status(record: StatusRecord, now_ms: u64)`, which places the event at its recorded time (`written_at_ms`) on the registry clock, and `apply_seen(id, ms)`. `DataDir` is managed in `lib.rs`.
-- Task 02_03 also made `SoundNotifier` (`notify/sound.rs`) start unarmed: it earns nothing until `arm()` is called, and the first observation after `arm()` is a silent baseline. `lib.rs` currently calls `sounds.arm()` right after constructing it.
+- Task 02_03 added `SoundNotifier::unarmed` (`notify/sound.rs`): a notifier built with it earns nothing until `arm()` is called, and the first observation after `arm()` is a silent baseline. `SoundNotifier::new` stays armed from construction. `lib.rs` currently builds the app's notifier with `SoundNotifier::new`.
 - Why startup must be silent: on start the first pass replays every live status file. A session the scan first saw as `Unknown` becomes `Done`, which `transition_alert` (`notify/mod.rs:31-40`) treats as a transition. Sounds must play only for changes seen after the initial load.
 - Liveness source, the same as the reconciler's:
   - `discovery/session_files.rs:71` `read_all(dir) -> io::Result<SessionFiles>`
@@ -53,7 +53,7 @@ None match.
 - `lib.rs`:
   - Create the feed with `DataDir::new(app_data_dir)`, `user_sessions_dir()` and `Arc::new(LiveProcesses)`.
   - Spawn it, manage `FeedShutdown`, and trigger it on exit.
-  - Remove the `sounds.arm()` call placed after `SoundNotifier::new` in 02_03, and pass `on_loaded` as a closure holding an `Arc` of the notifier that calls `arm()`. The snapshot publisher's next observation after that is the silent baseline, and it already reflects the initial load.
+  - Build the app's notifier with `SoundNotifier::unarmed` instead of `SoundNotifier::new`, and pass `on_loaded` as a closure holding an `Arc` of the notifier that calls `arm()`. The snapshot publisher's next observation after that is the silent baseline, and it already reflects the initial load.
   - When `user_sessions_dir()` is `None`, run with `sessions_dir: None` and treat every status as live.
 - `routes.rs`: `receive_hook` still parses for validation but no longer dispatches. It always returns `StatusCode::OK`. Update its doc comment: the legacy entries still post here until the app removes them.
 - `server.rs`: remove the `RegistryInput::Hook` variant and its arm. Switch any `lock_recovering` use to the re-export as needed.

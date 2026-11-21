@@ -54,7 +54,8 @@ None match.
   - `readFolderSettings(folder)` reads `<folder>/.vscode/settings.json` with `parseJsonc`. A missing file gives `{}`. A parse failure gives `null`, which tells the caller to keep the previous copy.
   - `writeWorkspace(folder, title, dirs?)` uses realpath and writes `generatedWorkspacePath(real, dirs)` with `buildWorkspace(readExisting(), folder, readFolderSettings() ?? previousCopied, title)`, where `previousCopied` is the existing `aydy.copiedSettings` object. It creates the directories under `dirs.workspaces` and returns the path.
   - `setWorkspaceTitle(path, title)` reads fresh, writes only when `settings['window.title'] !== title`, and returns whether it wrote.
-  - `syncFolderSettings(path)` reads `aydy.folder` from the file and rewrites it with fresh folder settings, keeping the title.
+  - `readWorkspaceFolder(path): Promise<string | null>` reads the generated file at `path` with `parseJsonc` and returns `aydy.folder` when it is a string, else `null` (missing file, parse failure, or no `aydy.folder`). It is exported; task 01_07 uses it to find a generated window's primary folder, so the file is parsed in one place.
+  - `syncFolderSettings(path)` gets the folder through `readWorkspaceFolder(path)` (doing nothing when it is `null`) and rewrites the file with fresh folder settings, keeping the title.
   - The output is JSON with 2-space indent and a trailing newline.
 
 ## Gotchas
@@ -78,4 +79,5 @@ None match.
   - `setWorkspaceTitle` skips writing when unchanged (mtime untouched)
   - a broken folder settings file keeps the prior copy
   - `isGeneratedWorkspace`
+  - `readWorkspaceFolder` returns `aydy.folder` from a file written by `writeWorkspace`, and `null` for a missing file, unparseable text, and a file without `aydy.folder`
 - Run `yarn test`, `yarn build-tsc` and `yarn lint`.

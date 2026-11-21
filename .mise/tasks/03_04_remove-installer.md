@@ -30,7 +30,7 @@ The app no longer installs hooks or publishes a port. On every start it removes 
 - `hooks/merge.rs`:
   - `is_aydy_hook` (`:468-482`) identifies legacy entries: an http hook with header `X-Aydy-Hook`, or a command containing it.
   - `remove_aydy_hooks(hooks: &mut Map<String, Value>) -> usize` (`:171`).
-  - It imports `listener::routes::HOOK_PATH` and `listener::server::RegisteredHooks` (`:10-11`).
+  - It imports `crate::hooks::stash::RemovedEntry` (`:9`), used only by the installer's sound takeover and restore, and `listener::routes::HOOK_PATH` and `listener::server::RegisteredHooks` (`:10-11`).
   - Everything else in it (planned hooks, port rewrite, sound takeover, restore) serves the installer.
 - `hooks/settings_file.rs` stays:
   - `SettingsFile::user()` (`:131`)
@@ -50,7 +50,7 @@ None match.
 - `merge.rs`:
   - Reduce it to `MARKER_HEADER`, `MARKER_VALUE`, `is_aydy_hook` and `remove_aydy_hooks`, plus the private helpers they need and their tests.
   - Delete the rest and its tests.
-  - Drop the listener imports.
+  - Drop the `use crate::hooks::stash::RemovedEntry;` import (`:9`), which no longer resolves once `stash.rs` is deleted, and the listener imports (`:10-11`).
   - Rewrite the module doc: it recognises the entries older app versions installed.
 - `legacy.rs`: `fn resolved(settings: &SettingsFile) -> Option<SettingsFile>`. When `fs::symlink_metadata(settings.path())` says the path is a symlink, return `SettingsFile::new(fs::canonicalize(path)?)` (the real file, following chains of links); `None` when canonicalize fails. That is a dangling link, which the spec ("Shared files") treats as its missing target in both settings writers: the extension's install creates the target, and this cleanup treats it as a missing file, so there is nothing to clean and it creates nothing. Otherwise return a `SettingsFile` for the same path. This keeps the fix inside `legacy.rs`, so `settings_file.rs` is not touched.
 - `legacy.rs`: `pub fn remove_legacy_hooks(settings: &SettingsFile) -> Result<usize, HookError>`.

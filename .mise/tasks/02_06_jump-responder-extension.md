@@ -11,7 +11,7 @@ Every VS Code window watches AYDY's jump directory. Only the one window that own
 
 ## Background
 
-- Task 02_05 made the app write `<data>/jump/<id>.json` containing `{"id","sessionId","cwd","tabLabel": string|null,"requestedAt": ms}`. The app then polls for up to 3 s (plus a 1 s grace period after a late claim) for `<data>/jump/<id>.reply.json` containing `{"open": "<abs path>", "reveal": RevealOutcome}`. It runs `code <open>` and deletes the reply.
+- Task 02_05 made the app write `<data>/jump/<id>.json` containing `{"id","sessionId","cwd","tabLabel": string|null,"requestedAt": ms}`. The app then polls for up to 3 s (plus a 1 s grace period after a late claim) for `<data>/jump/<id>.reply.json` containing `{"open": "<abs path>", "reveal": RevealOutcome}`. It runs `code <open>` and deletes the reply. Its whole budget is 4 s (`JumpRequests::budget()`, `src-tauri/src/jump/mod.rs`); a reply written after that is never read, and the app's next jump sweeps `*.reply.json` files older than 4 s.
 - `<data>` paths come from `jumpDir()` in `extension/src/aydyPaths.ts` (task 01_01). Atomic writes come from `writeAtomically` in `extension/src/atomicWrite.ts` (task 01_02).
 - Ownership (`.mise/spec.md`, "What" and "Jump"): a session belongs to exactly one window, the open window with the longest folder containing its session directory, ties to the lowest pid.
 - Session directory (`.mise/spec.md`, "Session directory"): the launch directory from the session's live `~/.claude/sessions/<pid>.json`, falling back to the request's `cwd`, then realpath'd (raw value on failure), because window folders are realpaths. 02_05 already puts the launch directory in the request's `cwd`; the responder looks it up again so a request from an older app, which carries the moving payload `cwd`, is still claimed by the right window.
@@ -33,12 +33,13 @@ None match.
 - `jumpRequests.ts`:
   - `parseJumpRequest(text): JumpRequest | null` is strict on types and validates `id` against `^[A-Za-z0-9_.-]{1,128}$`.
   - `shouldHandle(request, selfPid, windows: WindowFolders[], now)` is `ownerOf(request.cwd, windows) === selfPid && now - request.requestedAt <= 10_000`. It is pure, and it is always called with `request.cwd` already replaced by the resolved session directory.
-  - `class JumpResponder` takes options `{dir, pid: number, folders: () => string[], windows: () => Promise<WindowFolders[]>, launchCwds: () => Promise<ReadonlyMap<string, string | null> | null>, resolveCwd: (cwd: string | null) => Promise<string | null>, open: () => string | null, reveal: (r: RevealRequest) => Promise<RevealOutcome>, pollMs = 1000}`. `windows` defaults to `() => knownWindows(pid, folders())`, `launchCwds` to `readLiveSessions` and `resolveCwd` to `resolveCwd` from `sessionStore.ts`. `dir` has no default in the class; only `extension.ts` passes `jumpDir()`.
+  - `class JumpResponder` takes options `{dir, pid: number, folders: () => string[], windows: () => Promise<WindowFolders[]>, launchCwds: () => Promise<ReadonlyMap<string, string | null> | null>, resolveCwd: (cwd: string | null) => Promise<string | null>, open: () => string | null, reveal: (r: RevealRequest) => Promise<RevealOutcome>, now: () => number = Date.now, pollMs = 1000}`. `windows` defaults to `() => knownWindows(pid, folders())`, `launchCwds` to `readLiveSessions` and `resolveCwd` to `resolveCwd` from `sessionStore.ts`. `dir` has no default in the class; only `extension.ts` passes `jumpDir()`.
     - `start()`: `mkdir -p`, then `fs.watch` plus polling.
     - A scan reads the known windows and `launchCwds()` once, then every `*.json` that does not end in `.reply.json`. For each request it computes `cwd = await resolveCwd(launch?.get(request.sessionId) ?? request.cwd)` and calls `shouldHandle({...request, cwd}, ...)`. For each request it should handle:
       1. Claim it with `fs.promises.unlink`. `ENOENT` means skip.
       2. Run `reveal({sessionId, tabLabel})` when `tabLabel !== null`, otherwise use `'notPresent'`.
-      3. Write `<id>.reply.json` atomically with `{open: open() ?? owningFolder, reveal}`, where `owningFolder` is this window's longest folder containing the resolved `cwd`.
+      3. If `now() - request.requestedAt > REPLY_BUDGET_MS` (exported `const REPLY_BUDGET_MS = 4_000`, the app's 3 s timeout plus 1 s grace), skip the reply: the app has stopped waiting, and a reply nobody reads would only sit in the dir. The request is already claimed, so nothing is left behind.
+      4. Otherwise write `<id>.reply.json` atomically with `{open: open() ?? owningFolder, reveal}`, where `owningFolder` is this window's longest folder containing the resolved `cwd`.
     - It handles each id at most once and never overlaps scans.
 - `extension.ts`: create the responder with:
   - `pid`: `process.pid`
@@ -52,6 +53,7 @@ None match.
 
 - A parent window must never claim a session that a more specific window owns. Do not fall back to a prefix match when the windows list is unreadable: `knownWindows` still returns this window, so the worst case is the pre-registry behaviour for windows that never published (an older extension), never a guess.
 - Unlinking is still the claim, for the brief moment two windows disagree about the window list (one just opened). Only one can act.
+- The reply budget is checked after `reveal`, because a slow reveal can push a fresh request past it. Take `now` from an injectable clock option (`now: () => number = Date.now`) so tests drive it with fake timers.
 - Requests older than 10 s are stale (the app has given up). Ignore them and do not delete them. The app deletes its own requests on timeout.
 - Never throw from the watcher. Swallow IO errors until the next scan.
 - The `windows` and `launchCwds` defaults touch the real data and `~/.claude/sessions` directories. Only `extension.ts` may rely on them; every test injects both.
@@ -68,6 +70,7 @@ None match.
   - The responder claims an owned request, calls `reveal` with the label, and writes a reply with `open`.
   - It falls back to the owning folder when `open()` is null.
   - A null `tabLabel` replies `notPresent` without calling `reveal`.
+  - Late reply: a `reveal` fake that advances the clock past `REPLY_BUDGET_MS` from `requestedAt` leaves no `<id>.reply.json` (and the request is claimed); one that finishes within the budget writes the reply.
   - A foreign request is left untouched.
   - When two responders that both consider themselves the owner race on one request, only one replies.
 - Run `yarn test`, `yarn build-tsc` and `yarn lint`.

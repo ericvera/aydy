@@ -157,6 +157,7 @@ App side (`src-tauri/src/jump/mod.rs`, rewritten):
 2. Otherwise, with the target's `cwd` already set to the session's launch directory (`JumpTarget::with_launch_cwd`, from the live session file, falling back to the registry's `session.cwd`; see "Session directory"), write `jump/<id>.json` and poll every 50 ms, for up to 3 s, for `jump/<id>.reply.json`.
 3. On a reply, read and delete it. If `reveal == "duplicated"`, return `Duplicated`. Otherwise `raise(open)` and return `Jumped`.
 4. On timeout, unlink the request. If that unlink fails with `NotFound`, a window claimed it at the last moment, so wait 1 s more for the reply. Otherwise return `Unanswered`.
+5. The budget is 3 s plus the 1 s grace. Before writing each request, the app deletes every `jump/*.reply.json` older than that budget: a reply a window wrote after the app gave up.
 
 `JumpOutcome` becomes `Jumped | NoWindow | Unanswered | Duplicated`. `Raised` and `Unconfirmed` go, and so do `IdeLocks`, `WindowFolders` and `JumpWatch`.
 
@@ -164,7 +165,7 @@ Extension side:
 
 1. Only the window that owns the session by the ownership rule (`ownerOf(resolved session directory, knownWindows(...)) === process.pid`) claims the request, by unlinking it. A parent window never claims a session that a more specific window (for example a worktree under `.claude/worktrees/`) owns, so the tab-label check in `revealSession` (`extension/src/revealSession.ts:122`, labels are truncated titles and not unique) is never the only guard against opening a second live copy of a session (`revealSession.ts:9-16`). An `ENOENT` on unlink means another window took it, which only happens when two windows briefly disagree about the window list.
 2. It runs `revealSession` (`extension/src/revealSession.ts:115`) when `tabLabel` is non-null, and records `notPresent` otherwise.
-3. It writes the reply, with `open` = the workspace file path when the window has one, otherwise the window's longest folder containing the resolved session directory.
+3. It writes the reply, with `open` = the workspace file path when the window has one, otherwise the window's longest folder containing the resolved session directory. When more than 4 s (the app's budget) have passed since `requestedAt`, it writes no reply, because the app has stopped waiting.
 
 `code <workspace file>` focuses the window already holding that workspace. For plain-folder windows, `code <folder>` behaves as today.
 
@@ -176,7 +177,7 @@ Extension side:
   - It applies a status record only when the session is live and its `(mtime)` differs from the last applied one. A session whose file it applied before and that has now vanished gets `SessionEnd`.
   - It applies seen times.
   - Records carry their recorded time. `apply_status(record, now_ms)` places the event at `clock.now() - (now_ms - written_at_ms)` on the registry's monotonic clock, so a `Stop` from yesterday does not sort as brand new and a `UserPromptSubmit` counts working time from when it happened, not from app launch.
-  - Startup is silent. `SoundNotifier` starts unarmed and earns nothing until `arm()`; the first observation after `arm()` is a baseline that earns nothing either. The feed calls `arm()` once its first pass has been applied, so state loaded at startup (including scan-discovered `Unknown` sessions becoming `Done`) never plays a sound, and only changes seen after the initial load do.
+  - Startup is silent. The app builds its notifier with `SoundNotifier::unarmed` (02_04; `SoundNotifier::new` stays armed from construction, as tests and today's code expect), which earns nothing until `arm()`; the first observation after `arm()` is a baseline that earns nothing either. The feed calls `arm()` once its first pass has been applied, so state loaded at startup (including scan-discovered `Unknown` sessions becoming `Done`) never plays a sound, and only changes seen after the initial load do.
   - `HookPayload` and `into_event` move from `listener/routes.rs` to `session/hook_payload.rs` so both use them.
 - **Unread**: `Session` gains `attention_at_ms` and `seen_at_ms` (wall-clock epoch ms) and `unread() = attention > seen`. `apply_status` sets `attention_at_ms` to the record's time for `Stop` and `Notification` and clears it to `None` for every other event, so `attention` is set only while the last event is one of those two, and `unread()` is exactly the rule in "What".
   - `SessionRegistry` gains `apply_status(StatusRecord, now_ms)`, `apply_seen(id, ms)` and `mark_read(id, now_ms)`.
@@ -229,7 +230,7 @@ Task files list deletions under "Files to delete". Those do not count toward the
 - Uninstalling the extension runs `vscode:uninstall`, which deletes AYDY's command-hook entries from the user's settings file (01_03).
 - On every start, the stage 3 app deletes the legacy `X-Aydy-Hook` HTTP/curl entries from the user's settings file, writing through a symlink's real path so the link survives. It does not restore the stashed `afplay` entries, and it deletes the stash file `removed-hooks.json` from the app config dir, so those entries cannot be restored later (owner decision 4, 03_04).
 - Both settings writers rewrite `~/.claude/settings.json` through a symlink's real path and keep the file's permissions: the extension's atomic writer (01_02) and the app's legacy cleanup (03_04).
-- Deletes in `<data>`: the extension prunes status and seen files older than 7 days for dead sessions (01_04), window files are deleted on dispose and when their pid is dead (01_04, 01_05), and jump requests and replies are deleted after use (02_05, 02_06). The hook script deletes a status file on `SessionEnd`.
+- Deletes in `<data>`: the extension prunes status and seen files older than 7 days for dead sessions (01_04), window files are deleted on dispose and when their pid is dead (01_04, 01_05), jump requests and replies are deleted after use (02_05, 02_06), and each jump first deletes `jump/*.reply.json` files older than the 4 s reply budget (02_05). The hook script deletes a status file on `SessionEnd`.
 - Reopening a window from a generated `.code-workspace` restarts its extension host and may end Claude Code sessions running in it. It happens only on the owner's click (01_07).
 - Removed public surface:
   - The app's loopback HTTP listener and its routes.
@@ -252,11 +253,11 @@ Task files list deletions under "Files to delete". Those do not count toward the
 | 01_07_title-and-reopen.md | Write the title, sync folder settings, reopen offer and command | extension/src/reopenOffer.ts, extension/src/extension.ts, extension/package.json, extension/README.md |
 | 02_01_sync-module.md | Move `lock_recovering` to `sync.rs` | src-tauri/src/sync.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs, src-tauri/src/discovery/resume.rs, src-tauri/src/tray/popover.rs |
 | 02_02_status-files-reader.md | Shared hook payload parsing and status/seen file reader | src-tauri/src/session/hook_payload.rs, src-tauri/src/session/mod.rs, src-tauri/src/listener/routes.rs, src-tauri/src/discovery/status_files.rs, src-tauri/src/discovery/mod.rs |
-| 02_03_registry-seen-unread.md | Unread from attention vs seen times, status records at their recorded time, `mark_read` writes the seen file, sounds skip read sessions and stay silent until armed | src-tauri/src/session/registry.rs, src-tauri/src/session/session.rs, src-tauri/src/notify/sound.rs, src-tauri/src/ipc/commands.rs, src-tauri/src/lib.rs |
+| 02_03_registry-seen-unread.md | Unread from attention vs seen times, status records at their recorded time, `mark_read` writes the seen file, sounds skip read sessions, notifier gains an unarmed mode | src-tauri/src/session/registry.rs, src-tauri/src/session/session.rs, src-tauri/src/notify/sound.rs, src-tauri/src/ipc/commands.rs, src-tauri/src/lib.rs |
 | 02_04_file-feed.md | Loop feeding the registry from files, arms sounds after the initial load, listener stops feeding hooks | src-tauri/src/discovery/file_feed.rs, src-tauri/src/discovery/mod.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs, src-tauri/src/listener/routes.rs |
 | 02_05_jump-request-app.md | Jump by request and reply files, request `cwd` from the launch directory | src-tauri/src/jump/mod.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs, src-tauri/src/listener/routes.rs, src-tauri/src/ipc/commands.rs |
 | 02_06_jump-responder-extension.md | Extension claims and answers jump requests | extension/src/jumpRequests.ts, extension/src/extension.ts |
-| 02_07_jump-outcome-ui.md | Popover handles `unanswered` with the new copy | src/types/JumpOutcome.ts, src/composables/useJump.ts, src/components/molecules/JumpFailureNotice.vue, docs/design/menubar-ux.md |
+| 02_07_jump-outcome-ui.md | Popover handles `unanswered` with the new copy | src/types/JumpOutcome.ts, src/composables/useJump.ts, src/components/molecules/JumpFailureNotice.vue, docs/design/menubar-ux.md, src/App.test.ts |
 | 02_08_tracking-status-app.md | `tracking_status` IPC command | src-tauri/src/tracking.rs, src-tauri/src/lib.rs, src-tauri/src/ipc/commands.rs |
 | 02_09_install-extension-screen.md | Install-the-extension screen and popover gate | src/types/TrackingStatus.ts, src/composables/useTracking.ts, src/components/organisms/InstallExtension.vue, src/App.vue, docs/design/menubar-ux.md |
 | 03_01_remove-listener-ui.md | Remove hook, extension-prompt, stale and port-move UI; add the Session tracking row | src/App.vue, src/components/organisms/SettingsPane.vue, src/components/molecules/PopoverHeader.vue, src/composables/useSessions.ts, src/types/SessionList.ts |

@@ -11,6 +11,8 @@ The popover understands the new jump outcomes. A jump that no VS Code window ans
 - src/components/molecules/JumpFailureNotice.vue
 - docs/design/menubar-ux.md
 
+Tests updated (not counted): `src/App.test.ts`, `src/composables/useJump.test.ts`, `src/components/molecules/JumpFailureNotice.test.ts`.
+
 ## Background
 
 - Task 02_05 changed the Rust `JumpOutcome` (`src-tauri/src/jump/mod.rs`) to `jumped | noWindow | unanswered | duplicated`, serialized camelCase. `raised` and `unconfirmed` no longer exist.
@@ -20,6 +22,11 @@ The popover understands the new jump outcomes. A jump that no VS Code window ans
   - failure outcomes set `failure` (line 54)
   - `noWindow` keeps the popover open (line 62)
 - `src/components/molecules/JumpFailureNotice.vue:17-39`: `duplicated` uses the error variant and the rest use the warning, with the copy "VS Code did not come forward. AYDY asked…".
+- `src/App.test.ts` drives jumps through the whole popover with a typed `answers.jump: JumpOutcome` (`Answers` interface, `:57`). Once `'unconfirmed'` leaves `JumpOutcome`, `yarn build-tsc` fails on it:
+  - `:330-345` (`noWindow`) asserts the text does not contain 'did not come forward', which the new copy makes vacuous.
+  - `:352-366`, "says so when a jump was never confirmed", sets `answers.jump = 'unconfirmed'` and asserts 'VS Code did not come forward. AYDY asked twice and heard nothing back.'
+  - `:386-398`, "takes the jump notice away when it is dismissed", sets `answers.jump = 'unconfirmed'` and asserts 'did not come forward' is gone after dismissing.
+- `src/composables/useJump.test.ts` uses `'raised'` (`:69`) and `'unconfirmed'` (`:88-124`); `src/components/molecules/JumpFailureNotice.test.ts` uses `'unconfirmed'` and the old copy (`:8-46`).
 - The mock is `.mise/mock/popover-sessions.html`, state B: a warning banner with **No VS Code window took the jump.** in bold, then "The window that had this session may be closed." and a dismiss ✕.
 - The doc section to update is `docs/design/menubar-ux.md:287-323`, "What a jump does, and what it says when it cannot".
 
@@ -41,6 +48,14 @@ The popover understands the new jump outcomes. A jump that no VS Code window ans
 
 ## Verification
 
-- Update `src/composables/useJump.test.ts`: `unanswered` and `duplicated` set failure, `jumped` closes, `noWindow` returns false, and a rejection gives `unanswered`.
-- Update `src/components/molecules/JumpFailureNotice.test.ts` so the new copy renders for `unanswered`.
+- Update `src/App.test.ts`:
+  - `:57` keeps `jump: JumpOutcome`, now the new union.
+  - `:352-366`: set `answers.jump = 'unanswered'`, rename the test to say no window answered the jump, and assert the text contains 'No VS Code window took the jump. The window that had this session may be closed.' and that `close_popover` was not invoked.
+  - `:386-398`: set `answers.jump = 'unanswered'` and assert 'No VS Code window took the jump' is gone after dismissing.
+  - `:344` (`noWindow`): assert the text does not contain 'No VS Code window took the jump'.
+  - `grep -nE "unconfirmed|raised|did not come forward" src/App.test.ts` returns nothing.
+
+- Update `src/composables/useJump.test.ts`: `unanswered` and `duplicated` set failure, `jumped` closes, `noWindow` returns false, and a rejection gives `unanswered`. Drop or convert the `'raised'` case (`:69`) to `'jumped'`.
+- Update `src/components/molecules/JumpFailureNotice.test.ts` so the new copy renders for `unanswered`, and the variant test compares `unanswered` with `duplicated`.
+- `grep -rnE "'unconfirmed'|'raised'|did not come forward" src` returns nothing.
 - Run `yarn test`, `yarn build-tsc` and `yarn lint`.
