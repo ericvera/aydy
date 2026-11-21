@@ -7,7 +7,6 @@ pub mod ipc;
 pub mod jump;
 pub mod listener;
 pub mod notify;
-pub mod port_file;
 pub mod session;
 pub mod settings;
 pub mod sync;
@@ -31,16 +30,14 @@ use crate::discovery::status_files::DataDir;
 use crate::discovery::transcript::user_projects_dir;
 use crate::extension::command::{ExtensionCommands, LoopbackChannel};
 use crate::extension::registry::ExtensionRegistry;
-use crate::hooks::install::{follow_port_moves, HookInstaller, HookRegistry};
+use crate::hooks::legacy::{remove_legacy_hooks, remove_legacy_stash, LEGACY_STASH_FILE};
 use crate::hooks::settings_file::SettingsFile;
-use crate::hooks::stash::HookStash;
 use crate::ipc::commands::{close_popover, jump_to_session, mark_read, quit, tracking_status};
 use crate::ipc::snapshot_channel::{subscribe_sessions, PublisherShutdown, SessionSubscription};
 use crate::jump::{CodeCli, JumpRequests, Jumper, WindowRaiser};
 use crate::listener::port::{PortMemory, PortState};
 use crate::listener::server::ListenerShutdown;
 use crate::notify::sound::{SoundNotifier, SystemSoundPlayer};
-use crate::port_file::{publish_port, PortFile, PORT_FILE};
 use crate::session::registry::SessionRegistry;
 use crate::settings::commands::{read_settings, update_settings, Autostart};
 use crate::settings::store::{SettingsStore, SETTINGS_FILE};
@@ -48,10 +45,6 @@ use crate::settings::store::{SettingsStore, SETTINGS_FILE};
 /// The file the listener's port is remembered in, inside the app config
 /// directory.
 const PORT_MEMORY_FILE: &str = "listener-port";
-
-/// The file the hook entries AYDY took over are stashed in, inside the app
-/// config directory, so uninstall can put them back.
-const REMOVED_HOOKS_FILE: &str = "removed-hooks.json";
 
 /// The app version, as declared in `Cargo.toml` and baked in at compile time.
 pub fn version() -> &'static str {
@@ -73,9 +66,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         // First, before any plugin that could bind or write something a second
         // copy would fight over. An instance launched at login and one launched
-        // by hand would otherwise each bind a port and each rewrite the hook
-        // URLs to their own, leaving the user's sessions reporting to whichever
-        // wrote last.
+        // by hand would otherwise each bind a port and each watch the same
+        // files, applying every session change twice.
         .plugin(tauri_plugin_single_instance::init(|app, _arguments, _cwd| {
             // Launching AYDY while it is already running is how someone checks
             // that it is: showing the popover answers that, and is the only
@@ -119,11 +111,6 @@ pub fn run() {
             let ports = Arc::new(PortState::new());
             let config = app.path().app_config_dir()?;
             let memory = PortMemory::new(config.join(PORT_MEMORY_FILE));
-            let hooks = Arc::new(HookInstaller::new(
-                SettingsFile::user()?,
-                HookStash::new(config.join(REMOVED_HOOKS_FILE)),
-                Arc::new(HookRegistry::new()),
-            ));
             // One VS Code window, one registration, keyed by the extension
             // host PID it reports — the only identifier a window has.
             let windows = Arc::new(ExtensionRegistry::new(Arc::new(SystemClock)));
@@ -131,7 +118,6 @@ pub fn run() {
                 Arc::clone(&windows),
                 Arc::new(LoopbackChannel::new()),
             ));
-            let published = PortFile::new(config.join(PORT_FILE));
             // The settings are loaded before anything that consumes them is
             // spawned, so nothing ever runs against the defaults for the first
             // moments of the app's life and then jumps.
@@ -166,10 +152,8 @@ pub fn run() {
             app.manage(Arc::clone(&registry));
             app.manage(data.clone());
             app.manage(Arc::clone(&ports));
-            app.manage(Arc::clone(&hooks));
             app.manage(Arc::clone(&windows));
             app.manage(jumper);
-            app.manage(published.clone());
             app.manage(settings);
             app.manage(Arc::clone(&subscription));
             app.manage(ListenerShutdown::new(signal));
@@ -185,12 +169,18 @@ pub fn run() {
                 extensions,
                 shutdown,
             ));
-            tauri::async_runtime::spawn(follow_port_moves(hooks, Arc::clone(&ports)));
-            // The companion extension has no setting to hold the port in, so
-            // the port is published for it to read — and republished from the
-            // same watch the hook URLs are rewritten from, so the two can never
-            // name different ports.
-            tauri::async_runtime::spawn(publish_port(published, Arc::clone(&ports)));
+            // Older versions registered hooks that post to the listener, which
+            // is going away, and stashed sound hooks the app now plays itself.
+            let stash = config.join(LEGACY_STASH_FILE);
+            tauri::async_runtime::spawn_blocking(move || {
+                let removed = SettingsFile::user().and_then(|file| remove_legacy_hooks(&file));
+                if let Err(error) = removed {
+                    eprintln!("aydy: could not remove the legacy hooks: {error}");
+                }
+                if let Err(error) = remove_legacy_stash(&stash) {
+                    eprintln!("aydy: could not remove {}: {error}", stash.display());
+                }
+            });
 
             tauri::async_runtime::spawn(discovery::file_feed::run(
                 FileFeed::new(data, user_sessions_dir(), Arc::new(LiveProcesses)),
@@ -253,10 +243,6 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => tray::popover::reveal(handle),
         RunEvent::ExitRequested { .. } | RunEvent::Exit => {
-            // Withdrawn here rather than left to the publisher's watch: the
-            // process may be gone before that task is scheduled again, and a
-            // file left behind names a port AYDY has let go of.
-            handle.state::<PortFile>().withdraw();
             handle.state::<ListenerShutdown>().trigger();
             handle.state::<ScanShutdown>().trigger();
             handle.state::<ResumeShutdown>().trigger();

@@ -1,5 +1,4 @@
-//! The axum listener: routing, binding, the registry pump, shutdown, and
-//! whether the app can receive events at all.
+//! The axum listener: routing, binding, the registry pump and shutdown.
 
 use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -225,56 +224,6 @@ impl ListenerShutdown {
     pub fn trigger(&self) {
         if let Some(signal) = lock_recovering(&self.signal).take() {
             let _ = signal.send(());
-        }
-    }
-}
-
-/// What the hook installer reports about the hooks registered in the user's
-/// Claude Code settings.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RegisteredHooks {
-    /// Whether the app's hooks are present.
-    pub installed: bool,
-    /// The port the registered hook URLs post to.
-    pub port: Option<u16>,
-}
-
-/// Where the registered-hook facts come from.
-///
-/// The listener reads this rather than the settings file: the installer owns
-/// that file, and reading it from two places is how the two disagree.
-pub trait HookRegistration: Send + Sync {
-    /// The hooks currently registered.
-    fn registered(&self) -> RegisteredHooks;
-}
-
-/// Whether the app is able to receive hook events at all.
-pub struct ListenerHealth {
-    ports: Arc<PortState>,
-    hooks: Arc<dyn HookRegistration>,
-}
-
-impl ListenerHealth {
-    /// Health derived from the listener's port and the registered hooks.
-    pub fn new(ports: Arc<PortState>, hooks: Arc<dyn HookRegistration>) -> Self {
-        Self { ports, hooks }
-    }
-
-    /// Whether events registered hooks send are going nowhere.
-    ///
-    /// True only once hooks exist: with no hooks registered nothing is being
-    /// sent, so a freshly installed app is not broken and must not present
-    /// itself as such.
-    pub fn cannot_receive_events(&self) -> bool {
-        let hooks = self.hooks.registered();
-
-        if !hooks.installed {
-            return false;
-        }
-
-        match (self.ports.port(), hooks.port) {
-            (Some(bound), Some(registered)) => bound != registered,
-            _ => true,
         }
     }
 }
@@ -791,70 +740,6 @@ mod tests {
         assert!(TcpStream::connect(("127.0.0.1", listener.port))
             .await
             .is_err());
-    }
-
-    struct Registered(RegisteredHooks);
-
-    impl HookRegistration for Registered {
-        fn registered(&self) -> RegisteredHooks {
-            self.0
-        }
-    }
-
-    fn health(bound: Option<u16>, hooks: RegisteredHooks) -> ListenerHealth {
-        let ports = Arc::new(PortState::new());
-
-        if let Some(port) = bound {
-            ports.set_bound(port, None);
-        }
-
-        ListenerHealth::new(ports, Arc::new(Registered(hooks)))
-    }
-
-    #[test]
-    fn a_freshly_installed_app_with_no_hooks_can_still_receive_events() {
-        let health = health(None, RegisteredHooks::default());
-
-        assert!(!health.cannot_receive_events());
-    }
-
-    #[test]
-    fn hooks_registered_against_the_bound_port_can_receive_events() {
-        let health = health(
-            Some(51_234),
-            RegisteredHooks {
-                installed: true,
-                port: Some(51_234),
-            },
-        );
-
-        assert!(!health.cannot_receive_events());
-    }
-
-    #[test]
-    fn hooks_registered_with_nothing_listening_cannot_receive_events() {
-        let health = health(
-            None,
-            RegisteredHooks {
-                installed: true,
-                port: Some(51_234),
-            },
-        );
-
-        assert!(health.cannot_receive_events());
-    }
-
-    #[test]
-    fn hooks_registered_against_a_port_the_listener_left_cannot_receive_events() {
-        let health = health(
-            Some(51_235),
-            RegisteredHooks {
-                installed: true,
-                port: Some(51_234),
-            },
-        );
-
-        assert!(health.cannot_receive_events());
     }
 
     #[tokio::test]
