@@ -1,6 +1,5 @@
-//! The hook endpoint and the payload Claude Code posts to it, and the
-//! endpoints the companion VS Code extension registers itself on and reports
-//! its window's focus from.
+//! The legacy hook endpoint, and the endpoints the companion VS Code extension
+//! registers itself on and reports its window's focus from.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::extension::registry::{ExtensionPid, Registration, HEARTBEAT_INTERVAL};
 use crate::listener::server::{ListenerState, RegistryInput};
-use crate::session::hook_payload::{present, HookPayload};
+use crate::session::hook_payload::present;
 use crate::session::tab_match::WindowFocus;
 
 /// The path the registered hooks post to.
@@ -32,26 +31,13 @@ pub const EXTENSION_UNREGISTER_PATH: &str = "/extension/unregister";
 /// The path a window reports its focus and its active tab on.
 pub const EXTENSION_FOCUS_PATH: &str = "/extension/focus";
 
-/// Receives one hook event.
+/// Answers a legacy hook entry, which still posts here until the app removes
+/// it. Session state now comes from the status files, so the event is dropped.
 ///
-/// Answers 200 with an empty body before the event is applied, whatever the
-/// payload turns out to be. Claude Code blocks the user's session on this
-/// response and reports anything else — a non-2xx status, or a body that is
-/// neither empty nor a JSON object — as a hook error in their transcript. A
-/// monitoring tool has no business degrading the session it is monitoring, so
-/// an unreadable body is dropped silently rather than reported.
-pub async fn receive_hook(
-    State(state): State<ListenerState>,
-    body: Result<Bytes, BytesRejection>,
-) -> StatusCode {
-    if let Some(event) = body
-        .ok()
-        .and_then(|body| serde_json::from_slice::<HookPayload>(&body).ok())
-        .and_then(HookPayload::into_event)
-    {
-        state.dispatch(RegistryInput::Hook(event));
-    }
-
+/// Always 200 with an empty body. Claude Code blocks the user's session on
+/// this response and reports anything else — a non-2xx status, or a body that
+/// is neither empty nor a JSON object — as a hook error in their transcript.
+pub async fn receive_hook() -> StatusCode {
     StatusCode::OK
 }
 

@@ -27,6 +27,7 @@
 //! whose shape is not recognised is skipped and a directory that is missing
 //! degrades to hook-only tracking. Nothing here is allowed to be fatal.
 
+pub mod file_feed;
 pub mod label;
 pub mod process_tree;
 pub mod reconciler;

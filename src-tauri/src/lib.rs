@@ -21,6 +21,7 @@ use tauri::{Manager, RunEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
 use crate::clock::SystemClock;
+use crate::discovery::file_feed::{FeedShutdown, FileFeed};
 use crate::discovery::process_tree::SystemParents;
 use crate::discovery::reconciler::{user_sessions_dir, Reconciler, ScanShutdown};
 use crate::discovery::resume::ResumeShutdown;
@@ -160,7 +161,11 @@ pub fn run() {
             // The notifier holds a receiver on the settings rather than the
             // store, so a toggle moved in the pane is in force for the very
             // next transition without anything being re-read.
-            let sounds = Arc::new(SoundNotifier::new(
+            //
+            // It starts unarmed and is armed once the file feed has applied its
+            // first pass, so replaying every status file at launch is the
+            // silent baseline rather than a burst of sounds.
+            let sounds = Arc::new(SoundNotifier::unarmed(
                 Arc::new(SystemSoundPlayer),
                 settings.subscribe(),
                 Arc::new(SystemClock),
@@ -170,9 +175,11 @@ pub fn run() {
             let (scan_signal, scan_shutdown) = tokio::sync::oneshot::channel();
             let (resume_signal, resume_shutdown) = tokio::sync::oneshot::channel();
             let (publish_signal, publish_shutdown) = tokio::sync::oneshot::channel();
+            let (feed_signal, feed_shutdown) = tokio::sync::oneshot::channel();
+            let data = DataDir::new(app.path().app_data_dir()?);
 
             app.manage(Arc::clone(&registry));
-            app.manage(DataDir::new(app.path().app_data_dir()?));
+            app.manage(data.clone());
             app.manage(Arc::clone(&ports));
             app.manage(Arc::clone(&health));
             app.manage(Arc::clone(&hooks));
@@ -185,6 +192,7 @@ pub fn run() {
             app.manage(ScanShutdown::new(scan_signal));
             app.manage(ResumeShutdown::new(resume_signal));
             app.manage(PublisherShutdown::new(publish_signal));
+            app.manage(FeedShutdown::new(feed_signal));
 
             tauri::async_runtime::spawn(listener::server::run(
                 memory,
@@ -200,6 +208,16 @@ pub fn run() {
             // same watch the hook URLs are rewritten from, so the two can never
             // name different ports.
             tauri::async_runtime::spawn(publish_port(published, Arc::clone(&ports)));
+
+            tauri::async_runtime::spawn(discovery::file_feed::run(
+                FileFeed::new(data, user_sessions_dir(), Arc::new(LiveProcesses)),
+                Arc::clone(&registry),
+                Box::new({
+                    let sounds = Arc::clone(&sounds);
+                    move || sounds.arm()
+                }),
+                feed_shutdown,
+            ));
 
             // One loop feeds the menu bar icon, the popover and the sounds, so
             // all three are always derived from the same snapshot.
@@ -263,6 +281,7 @@ pub fn run() {
             handle.state::<ScanShutdown>().trigger();
             handle.state::<ResumeShutdown>().trigger();
             handle.state::<PublisherShutdown>().trigger();
+            handle.state::<FeedShutdown>().trigger();
         }
         _ => {}
     });

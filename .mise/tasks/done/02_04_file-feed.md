@@ -45,6 +45,7 @@ None match.
        - Otherwise remove the id from `held` and put the record in `apply`.
 
        A record whose mtime changed while it was held (for example a `UserPromptSubmit` that followed quickly) simply replaces the held one by the same rule. Drop `held` entries whose status file vanished or whose session is no longer live. On the first pass nothing is held, because sounds are not armed yet and the whole initial load must apply at once. Set `first_pass = false` at the end of the pass.
+
     4. `ended` holds the ids in `applied` whose file vanished. Remove them from `applied`.
     5. `seen` holds every seen time for the ids present.
   - `pub fn apply_changes(registry: &Mutex<SessionRegistry>, changes, now_ms: u64)` applies the records with `apply_status(record, now_ms)`, then a `SessionEnd` `HookEvent` for each ended id, then `apply_seen`. It uses `crate::sync::lock_recovering`. `now_ms` is `SystemTime::now()` as epoch ms, read once per pass by the caller; tests pass a fixed value.

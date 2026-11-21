@@ -19,7 +19,7 @@ use crate::listener::routes::{
     EXTENSION_FOCUS_PATH, EXTENSION_HEARTBEAT_PATH, EXTENSION_REGISTER_PATH,
     EXTENSION_UNREGISTER_PATH, HOOK_PATH,
 };
-use crate::session::event::{HookEvent, WindowId};
+use crate::session::event::WindowId;
 use crate::session::registry::SessionRegistry;
 use crate::session::tab_match::WindowFocus;
 pub use crate::sync::lock_recovering;
@@ -27,12 +27,9 @@ pub use crate::sync::lock_recovering;
 /// One thing the registry is told, queued off the request path.
 ///
 /// Everything the listener receives arrives on one queue so that it is applied
-/// in the order it was received. A focus report overtaking the hook event it
-/// answers would clear an unread that had not been raised yet.
+/// in the order it was received.
 #[derive(Debug)]
 pub enum RegistryInput {
-    /// One hook event from a Claude Code session.
-    Hook(HookEvent),
     /// What a VS Code window reports about its focus and its active tab.
     Focus(WindowFocus),
     /// A window that has closed, so its focus stops counting as the last thing
@@ -137,7 +134,6 @@ fn apply_input(registry: &Mutex<SessionRegistry>, input: RegistryInput) {
     let mut registry = lock_recovering(registry);
 
     match input {
-        RegistryInput::Hook(event) => registry.apply_hook_event(event),
         RegistryInput::Focus(focus) => registry.apply_window_focus(focus),
         RegistryInput::WindowClosed(window_id) => registry.remove_window(window_id),
     }
@@ -175,8 +171,8 @@ pub async fn serve(
         .await
 }
 
-/// Binds a loopback port and receives hook events into `registry` until
-/// `shutdown` fires.
+/// Binds a loopback port and applies what the companion extension reports to
+/// `registry` until `shutdown` fires.
 ///
 /// The remembered port is preferred so the registered hook URLs usually stay
 /// valid across launches; when it is taken, the OS assigns another, the new one
@@ -316,8 +312,7 @@ mod tests {
     use crate::extension::command::{LoopbackChannel, COMMAND_PATH};
     use crate::extension::registry::{ExtensionPid, ExtensionRegistry};
     use crate::listener::port::PortMove;
-    use crate::session::event::SessionEnrichment;
-    use crate::session::status::SessionStatus;
+    use crate::session::event::{HookEvent, HookEventKind, SessionEnrichment};
 
     static SCRATCH: AtomicU32 = AtomicU32::new(0);
 
@@ -408,36 +403,23 @@ mod tests {
             .await
         }
 
-        /// Posts an event for a session of its own and waits for it to land,
-        /// so everything posted before it has landed too — the queue is ordered
-        /// and drained by a single task.
-        async fn drain(&self) {
-            let marker = format!("drain-{}", SCRATCH.fetch_add(1, Ordering::Relaxed));
-            self.post(&event(&marker, "SessionStart")).await;
+        /// Gives the pump time to apply anything already queued, for a test
+        /// asserting that something did not happen.
+        async fn settle(&self) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
-            for _ in 0..600 {
-                if self.status_of(&marker).is_some() {
+        /// Waits for `condition` to hold, failing after ten seconds.
+        async fn eventually(&self, condition: impl Fn(&Self) -> bool) {
+            for _ in 0..2_000 {
+                if condition(self) {
                     return;
                 }
 
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
 
-            panic!("no hook event ever reached the registry");
-        }
-
-        /// The status of a tracked session, as the registry holds it now.
-        fn status_of(&self, session_id: &str) -> Option<SessionStatus> {
-            lock_recovering(&self.registry)
-                .session(session_id)
-                .map(|session| session.status())
-        }
-
-        /// A tracked session's notification message.
-        fn message_of(&self, session_id: &str) -> Option<String> {
-            lock_recovering(&self.registry)
-                .session(session_id)
-                .and_then(|session| session.notification_message.clone())
+            panic!("the registry never reached the expected state");
         }
 
         /// How many sessions the registry is tracking.
@@ -448,13 +430,7 @@ mod tests {
         /// Tracks and labels `sessions`, and places every one of them in
         /// `window` — the state a scan and a transcript pass leave behind
         /// before any tab has been reported.
-        async fn place(&self, window: ExtensionPid, sessions: &[(&str, &str)]) {
-            for (session_id, _) in sessions {
-                self.post(&event(session_id, "SessionStart")).await;
-            }
-
-            self.drain().await;
-
+        fn place(&self, window: ExtensionPid, sessions: &[(&str, &str)]) {
             let files: Vec<SessionFile> = sessions
                 .iter()
                 .enumerate()
@@ -474,6 +450,7 @@ mod tests {
             let mut registry = lock_recovering(&self.registry);
 
             for (session_id, label) in sessions {
+                registry.apply_hook_event(HookEvent::new(*session_id, HookEventKind::SessionStart));
                 registry.apply_enrichment(
                     session_id,
                     SessionEnrichment {
@@ -643,145 +620,32 @@ mod tests {
         }
     }
 
+    /// The legacy hook entries keep posting until the app removes them, and a
+    /// non-2xx is a hook error in the user's session, so every post is still
+    /// accepted. Session state comes from the status files now.
     #[tokio::test]
-    async fn a_session_start_event_starts_tracking_the_session() {
+    async fn a_hook_post_is_accepted_and_leaves_the_registry_alone() {
         let listener = Harness::start(None).await;
 
-        let response = listener.post(&event("s1", "SessionStart")).await;
+        for body in [
+            event("s1", "SessionStart"),
+            event("s1", "UserPromptSubmit"),
+            event("s1", "Notification"),
+            event("s1", "Stop"),
+            event("s1", "SessionEnd"),
+            event("s1", "PreToolUse"),
+            r#"{"hook_event_name":"Stop"}"#.to_string(),
+            "{not json at all".to_string(),
+            String::new(),
+        ] {
+            let response = listener.post(&body).await;
 
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), Some(SessionStatus::Done));
-    }
+            assert_accepted(&response);
+            assert_eq!(body_of(&response), "");
+        }
 
-    #[tokio::test]
-    async fn a_user_prompt_submit_event_puts_the_session_to_work() {
-        let listener = Harness::start(None).await;
-
-        let response = listener.post(&event("s1", "UserPromptSubmit")).await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), Some(SessionStatus::Working));
-    }
-
-    #[tokio::test]
-    async fn a_notification_event_puts_the_session_in_needs_input() {
-        let listener = Harness::start(None).await;
-
-        let response = listener.post(&event("s1", "Notification")).await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), Some(SessionStatus::NeedsInput));
-    }
-
-    #[tokio::test]
-    async fn a_stop_event_completes_the_turn() {
-        let listener = Harness::start(None).await;
-        listener.post(&event("s1", "UserPromptSubmit")).await;
-
-        let response = listener.post(&event("s1", "Stop")).await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), Some(SessionStatus::Done));
-    }
-
-    #[tokio::test]
-    async fn a_session_end_event_stops_tracking_the_session() {
-        let listener = Harness::start(None).await;
-        listener.post(&event("s1", "SessionStart")).await;
-
-        let response = listener.post(&event("s1", "SessionEnd")).await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), None);
-    }
-
-    #[tokio::test]
-    async fn a_notification_message_reaches_the_registry() {
-        let listener = Harness::start(None).await;
-
-        let response = listener
-            .post(
-                r#"{"session_id":"s1","hook_event_name":"Notification","message":"Claude needs your permission to use Bash","notification_type":"permission_prompt"}"#,
-            )
-            .await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(
-            listener.message_of("s1"),
-            Some("Claude needs your permission to use Bash".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn the_working_directory_and_transcript_path_reach_the_registry() {
-        let listener = Harness::start(None).await;
-
-        let response = listener
-            .post(
-                r#"{"session_id":"s1","hook_event_name":"Stop","cwd":"/Users/eric/Code/aydy","transcript_path":"/Users/eric/.claude/projects/aydy/s1.jsonl"}"#,
-            )
-            .await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        let registry = lock_recovering(&listener.registry);
-        let session = registry.session("s1").expect("a tracked session");
-
-        assert_eq!(session.cwd, Some(PathBuf::from("/Users/eric/Code/aydy")));
-        assert_eq!(
-            session.transcript_path,
-            Some(PathBuf::from("/Users/eric/.claude/projects/aydy/s1.jsonl"))
-        );
-    }
-
-    #[tokio::test]
-    async fn an_event_name_the_app_does_not_track_is_accepted_and_ignored() {
-        let listener = Harness::start(None).await;
-
-        let response = listener.post(&event("s1", "PreToolUse")).await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), None);
-    }
-
-    #[tokio::test]
-    async fn a_malformed_body_is_accepted_and_ignored() {
-        let listener = Harness::start(None).await;
-
-        let response = listener.post("{not json at all").await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.tracked(), 1);
-    }
-
-    #[tokio::test]
-    async fn an_empty_body_is_accepted_and_ignored() {
-        let listener = Harness::start(None).await;
-
-        let response = listener.post("").await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.tracked(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_payload_naming_no_session_is_accepted_and_ignored() {
-        let listener = Harness::start(None).await;
-
-        let response = listener.post(r#"{"hook_event_name":"Stop"}"#).await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.tracked(), 1);
+        listener.settle().await;
+        assert_eq!(listener.tracked(), 0);
     }
 
     /// A hook URL or method that misses the endpoint is the installer's
@@ -857,21 +721,6 @@ mod tests {
         assert_eq!(listener.memory.remembered(), Some(listener.port));
     }
 
-    #[tokio::test]
-    async fn a_session_reporting_in_after_a_port_move_is_tracked_from_that_point() {
-        let occupied = bind_loopback(None).await.expect("a loopback port");
-        let listener = Harness::start(Some(occupied.port)).await;
-
-        let response = listener.post(&event("never-seen-before", "Stop")).await;
-
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(
-            listener.status_of("never-seen-before"),
-            Some(SessionStatus::Done)
-        );
-    }
-
     /// Runs on a multi-threaded runtime, as the app does.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_response_does_not_wait_for_the_registry() {
@@ -896,8 +745,6 @@ mod tests {
         assert_accepted(&response);
         release.send(()).expect("the holding thread to be waiting");
         holder.join().expect("the holding thread to finish");
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), Some(SessionStatus::Done));
     }
 
     #[tokio::test]
@@ -920,7 +767,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_poisoned_registry_lock_does_not_stop_later_events_from_being_tracked() {
+    async fn a_poisoned_registry_lock_does_not_stop_later_reports_from_being_applied() {
         let listener = Harness::start(None).await;
         let poisoned = Arc::clone(&listener.registry);
         std::thread::spawn(move || {
@@ -929,12 +776,20 @@ mod tests {
         })
         .join()
         .expect_err("the poisoning thread to have panicked");
+        let window = FakeWindow::open(65_921).await;
+        listener.register(&window).await;
+        listener.place(65_921, &[("s1", "Fix the auth flow")]);
 
-        let response = listener.post(&event("s1", "Stop")).await;
+        listener
+            .post_extension(
+                EXTENSION_FOCUS_PATH,
+                r#"{"pid":65921,"focused":true,"activeTabLabel":"Fix the auth flow"}"#,
+            )
+            .await;
 
-        assert_accepted(&response);
-        listener.drain().await;
-        assert_eq!(listener.status_of("s1"), Some(SessionStatus::Done));
+        listener
+            .eventually(|listener| listener.current() == Some("s1".to_string()))
+            .await;
     }
 
     #[tokio::test]
@@ -1187,12 +1042,10 @@ mod tests {
         let listener = Harness::start(None).await;
         let window = FakeWindow::open(65_921).await;
         listener.register(&window).await;
-        listener
-            .place(
-                65_921,
-                &[("s1", "Fix the auth flow"), ("s2", "Rewrite the parser")],
-            )
-            .await;
+        listener.place(
+            65_921,
+            &[("s1", "Fix the auth flow"), ("s2", "Rewrite the parser")],
+        );
 
         let response = listener
             .post_extension(
@@ -1205,8 +1058,9 @@ mod tests {
             body_of(&response),
             r#"{"registered":true,"heartbeatSeconds":10}"#
         );
-        listener.drain().await;
-        assert_eq!(listener.current(), Some("s1".to_string()));
+        listener
+            .eventually(|listener| listener.current() == Some("s1".to_string()))
+            .await;
     }
 
     /// The only confirmation a jump ever gets, over the real endpoint. Nothing
@@ -1217,7 +1071,7 @@ mod tests {
         let listener = Harness::start(None).await;
         let window = FakeWindow::open(65_921).await;
         listener.register(&window).await;
-        listener.place(65_921, &[("s1", "Fix the auth flow")]).await;
+        listener.place(65_921, &[("s1", "Fix the auth flow")]);
         let waiting = listener
             .jumps
             .watch(65_921, Some("Fix the auth flow".to_string()));
@@ -1257,7 +1111,7 @@ mod tests {
         let listener = Harness::start(None).await;
         let window = FakeWindow::open(65_921).await;
         listener.register(&window).await;
-        listener.place(65_921, &[("s1", "Fix the auth flow")]).await;
+        listener.place(65_921, &[("s1", "Fix the auth flow")]);
 
         listener
             .post_extension(
@@ -1266,7 +1120,7 @@ mod tests {
             )
             .await;
 
-        listener.drain().await;
+        listener.settle().await;
         assert_eq!(listener.current(), None);
     }
 
@@ -1276,7 +1130,7 @@ mod tests {
     #[tokio::test]
     async fn a_focus_report_from_a_window_aydy_never_registered_is_refused() {
         let listener = Harness::start(None).await;
-        listener.place(65_921, &[("s1", "Fix the auth flow")]).await;
+        listener.place(65_921, &[("s1", "Fix the auth flow")]);
 
         let response = listener
             .post_extension(
@@ -1289,7 +1143,7 @@ mod tests {
             body_of(&response),
             r#"{"registered":false,"heartbeatSeconds":10}"#
         );
-        listener.drain().await;
+        listener.settle().await;
         assert_eq!(listener.current(), None);
     }
 
@@ -1301,22 +1155,24 @@ mod tests {
         let listener = Harness::start(None).await;
         let window = FakeWindow::open(65_921).await;
         listener.register(&window).await;
-        listener.place(65_921, &[("s1", "Fix the auth flow")]).await;
+        listener.place(65_921, &[("s1", "Fix the auth flow")]);
         listener
             .post_extension(
                 EXTENSION_FOCUS_PATH,
                 r#"{"pid":65921,"focused":true,"activeTabLabel":"Fix the auth flow"}"#,
             )
             .await;
-        listener.drain().await;
-        assert_eq!(listener.current(), Some("s1".to_string()));
+        listener
+            .eventually(|listener| listener.current() == Some("s1".to_string()))
+            .await;
 
         listener
             .post_extension(EXTENSION_UNREGISTER_PATH, r#"{"pid":65921}"#)
             .await;
 
-        listener.drain().await;
-        assert_eq!(listener.current(), None);
+        listener
+            .eventually(|listener| listener.current().is_none())
+            .await;
     }
 
     #[tokio::test]
