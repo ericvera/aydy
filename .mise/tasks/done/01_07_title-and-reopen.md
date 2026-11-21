@@ -52,7 +52,8 @@ None match.
 "menus": { "commandPalette": [{ "command": "aydy.showSessionCountInTabTitle", "when": "workbenchState == folder" }] }
 ```
 
-  Add `onCommand` activation only if needed. `onStartupFinished` already covers it.
+Add `onCommand` activation only if needed. `onStartupFinished` already covers it.
+
 - `README.md`: document the tab count, the reopen offer and command, where the generated files live, and that reopening restarts the window.
 
 ## Gotchas

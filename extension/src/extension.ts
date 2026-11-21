@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs'
+import { basename } from 'node:path'
 
 import * as vscode from 'vscode'
 
@@ -13,10 +14,18 @@ import {
   releaseFailureNotice,
 } from './hookNotice'
 import { ensureHooks, installHookScript } from './hookInstall'
+import { offerKey, reopenAsWorkspace, shouldOffer } from './reopenOffer'
 import type { RevealEnvironment, RevealRequest } from './revealSession'
 import { revealSession } from './revealSession'
+import { tabTitle } from './sessionState'
 import { publishWindow, unpublishWindow } from './windowRegistry'
 import { WindowTracker } from './windowTracker'
+import {
+  isGeneratedWorkspace,
+  readWorkspaceFolder,
+  setWorkspaceTitle,
+  syncFolderSettings,
+} from './workspaceFile'
 
 /**
  * The Claude Code extension, whose version this integration is pinned against.
@@ -63,6 +72,137 @@ let client: AydyClient | undefined
 let unreadCount = 0
 
 export const currentUnreadCount = (): number => unreadCount
+
+const log = (error: unknown): void => {
+  console.error('AYDY:', error)
+}
+
+let workspaceWrites: Promise<unknown> = Promise.resolve()
+
+const enqueueWorkspaceWrite = (fn: () => Promise<unknown>): void => {
+  workspaceWrites = workspaceWrites.then(fn).catch(log)
+}
+
+let generated: { path: string; folder: string } | undefined
+
+const writeTitle = (): void => {
+  const target = generated
+  if (target === undefined) {
+    return
+  }
+  enqueueWorkspaceWrite(() =>
+    setWorkspaceTitle(
+      target.path,
+      tabTitle(unreadCount, basename(target.folder)),
+    ),
+  )
+}
+
+const syncSettings = (path: string): void => {
+  enqueueWorkspaceWrite(() => syncFolderSettings(path))
+}
+
+const generatedWorkspaceFile = (): string | undefined => {
+  const file = vscode.workspace.workspaceFile
+  return file?.scheme === 'file' && isGeneratedWorkspace(file.fsPath)
+    ? file.fsPath
+    : undefined
+}
+
+const keepGeneratedWorkspace = async (
+  context: vscode.ExtensionContext,
+  path: string,
+): Promise<void> => {
+  const folder = await readWorkspaceFolder(path)
+  if (folder === null) {
+    return
+  }
+  generated = { path, folder }
+  syncSettings(path)
+  writeTitle()
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(
+      vscode.Uri.file(folder),
+      '.vscode/settings.json',
+    ),
+  )
+  context.subscriptions.push(
+    watcher,
+    watcher.onDidCreate(() => {
+      syncSettings(path)
+    }),
+    watcher.onDidChange(() => {
+      syncSettings(path)
+    }),
+    watcher.onDidDelete(() => {
+      syncSettings(path)
+    }),
+  )
+}
+
+const REOPEN_MESSAGE =
+  "Show how many Claude Code sessions need you in this window's tab? AYDY reopens this window from a workspace file kept outside the repo. This restarts the window, which may end Claude Code sessions open in it."
+const NOT_NOW = 'Not now'
+const REOPEN = 'Reopen as workspace'
+const SINGLE_FOLDER_ONLY =
+  'AYDY: The session count in the tab title only applies to a window opened as a single folder.'
+
+const openWorkspace = async (folder: string): Promise<void> => {
+  await reopenAsWorkspace(folder, tabTitle(unreadCount, basename(folder)), {
+    openFolder: (path, options) =>
+      vscode.commands.executeCommand(
+        'vscode.openFolder',
+        vscode.Uri.file(path),
+        options,
+      ),
+  })
+}
+
+const workspaceFileName = (): string | undefined =>
+  vscode.workspace.workspaceFile?.toString()
+
+const offerReopen = async (
+  context: vscode.ExtensionContext,
+  folders: string[],
+): Promise<void> => {
+  const folder = folders[0]
+  if (
+    folder === undefined ||
+    !shouldOffer({
+      workspaceFile: workspaceFileName(),
+      folders,
+      offered: context.globalState.get<boolean>(offerKey(folder)) === true,
+    })
+  ) {
+    return
+  }
+  // Marked before asking, so a reload during the notice cannot show it twice.
+  await context.globalState.update(offerKey(folder), true)
+  const choice = await vscode.window.showInformationMessage(
+    REOPEN_MESSAGE,
+    NOT_NOW,
+    REOPEN,
+  )
+  if (choice === REOPEN) {
+    await openWorkspace(folder)
+  }
+}
+
+const showCountInTabTitle = async (folders: string[]): Promise<void> => {
+  const folder = folders[0]
+  if (
+    folder === undefined ||
+    !shouldOffer({
+      workspaceFile: workspaceFileName(),
+      folders,
+      offered: false,
+    })
+  ) {
+    await vscode.window.showInformationMessage(SINGLE_FOLDER_ONLY)
+    return
+  }
+  await openWorkspace(folder)
+}
 
 const localFolders = (): string[] =>
   (vscode.workspace.workspaceFolders ?? [])
@@ -215,13 +355,24 @@ export const activate = (context: vscode.ExtensionContext): void => {
     focused: () => vscode.window.state.focused,
     onCount: (count) => {
       unreadCount = count
+      writeTitle()
     },
   })
+
+  const generatedPath = generatedWorkspaceFile()
+  if (generatedPath === undefined) {
+    offerReopen(context, folders).catch(log)
+  } else {
+    keepGeneratedWorkspace(context, generatedPath).catch(log)
+  }
 
   client = started
   context.subscriptions.push(
     { dispose: () => void unpublish() },
     tracker,
+    vscode.commands.registerCommand('aydy.showSessionCountInTabTitle', () =>
+      showCountInTabTitle(folders).catch(log),
+    ),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       folders = localFolders()
       publish(folders)

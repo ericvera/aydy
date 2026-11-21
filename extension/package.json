@@ -22,5 +22,21 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "contributes": {}
+  "contributes": {
+    "commands": [
+      {
+        "command": "aydy.showSessionCountInTabTitle",
+        "title": "Show Session Count in Tab Title",
+        "category": "AYDY"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "aydy.showSessionCountInTabTitle",
+          "when": "workbenchState == folder"
+        }
+      ]
+    }
+  }
 }

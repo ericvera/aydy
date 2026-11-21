@@ -120,6 +120,39 @@ Afterwards, a Claude tab that **opened** while the call was made is reported as 
 duplicate rather than as a successful reveal. It means a guard was wrong, and a second
 copy of a session the user does not know about is worse than one they are told about.
 
+## The session count in the tab title
+
+A window can show how many of its Claude Code sessions need you in its own title: `○
+okven` when none do, `● okven` for one, `● 3 okven` for several and `● 9+ okven` past
+nine. The count is this window's sessions that finished or asked for something since you
+last had the window focused.
+
+VS Code only lets an extension set a window's title through a settings file, and a
+plain-folder window's only settings file is the repository's own `.vscode/settings.json`.
+So the title is written into a workspace file AYDY generates and keeps **outside the
+repository**, at
+`~/Library/Application Support/app.aydy/workspaces/<hash>/<folder>.code-workspace`, one
+per folder. The folder's own `.vscode/settings.json` is copied into that file, and copied
+again whenever it is created, changed or deleted, so the window keeps behaving the way
+the repository says. Whether a window-scoped setting in `.vscode/settings.json` applies
+in such a window only through that copy has **not been verified**.
+
+Getting a window onto that file means reopening it:
+
+- **The offer.** The first time a folder is opened as a plain single-folder window, a
+  notification asks whether to reopen it as a workspace, with **Not now** and **Reopen as
+  workspace**. It is shown once per folder, whichever you pick.
+- **The command.** `AYDY: Show Session Count in Tab Title` in the command palette does
+  the same reopen at any time. It is listed only in a plain-folder window.
+
+Nothing reopens without that click. **Reopening restarts the window**, which may end
+Claude Code sessions open in it.
+
+Plain-folder windows keep VS Code's default title, and a window opened from a
+`.code-workspace` of your own is left alone: nothing is written there. Folder names go
+into the title literally, but VS Code still expands `${...}` inside a title, so a folder
+whose name contains one shows the expansion.
+
 ## How the two find each other
 
 AYDY writes its current port to
