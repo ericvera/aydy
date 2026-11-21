@@ -10,6 +10,7 @@ The VS Code extension stops trying to register with the AYDY app over loopback H
 - extension/src/revealSession.ts
 - extension/package.json
 - extension/README.md
+- extension/src/revealSession.test.ts (test; receives the moved `versionOf` assertions)
 
 ## Files to delete
 
@@ -20,7 +21,7 @@ The VS Code extension stops trying to register with the AYDY app over loopback H
 
 - `extension/src/extension.ts:120-170` (`activate` at `:120`) creates `AydyClient` (port file, register, heartbeat, command server) and `FocusReporter`, and wires `onDidChangeTabs` and `onDidChangeTabGroups` to report focus. `windowFacts` (`:52-58`), `activeTabLabel` (`:102-106`) and `focusState` (`:108-111`) exist only for them.
 - `deactivate` (`:171`) closes the client. Since 01_05 it also calls `unpublishWindow(process.pid)`, which must stay.
-- `versionOf` (`extension/src/aydyClient.ts:137`) is used by `claudeCodeVersion` (`extension.ts:47`) and must survive. Move it, with its tests, into `revealSession.ts` and `revealSession.test.ts`.
+- `versionOf` (`extension/src/aydyClient.ts:137`) is used by `claudeCodeVersion` (`extension.ts:47`) and must survive. Move it into `revealSession.ts`. Its tests move into `revealSession.test.ts`, but only the `versionOf` assertions: `expect(versionOf({ version: '2.1.238' })).toBe('2.1.238')` (`aydyClient.test.ts:702`) and the three `versionOf` expectations at `aydyClient.test.ts:710-712` (`undefined`, `{}`, `{ version: 42 }` give `null`). The rest of that second test (`aydy()`, `portFile`, `new AydyClient`, registration) goes with the deleted file, as does its doc comment about registering.
 - Since stage 1 and 02_06, the extension's real work is in:
   - `installTracking` (01_03)
   - `WindowTracker` (01_05)
@@ -47,6 +48,12 @@ None match.
   - Remove the loopback, port file and registration text.
   - Describe the hook script, the files under `~/Library/Application Support/app.aydy/`, the tab count and the reopen command.
   - Say that uninstalling removes the hook entries.
+  - Rewrite or remove these stale passages, each of which describes the loopback design:
+    - `extension/README.md:77`: "The tab label goes over raw and AYDY matches it against the session titles it holds". The label now goes in the jump request file and the owning window's `revealSession` matches it against its own Claude tabs.
+    - `:104`: "refusing is reported to AYDY rather than swallowed". The refusal is now written as the `reveal` field of the reply file.
+    - `:107`: "**AYDY placed the session in this window**, through the process tree". Replace with the ownership rule: only the window whose folder most specifically contains the session's launch directory claims the request.
+    - `:154-156`: "The version is reported to AYDY either way" and "A window with no Claude Code extension at all registers exactly the same way". Nothing reports the version and nothing registers; say the version is only checked locally, and a window without Claude Code still tracks and answers jumps, it simply reveals nothing.
+    The line numbers are from before stage 1; 01_07 added text to this README, so find each passage by its quoted text.
 
 ## Gotchas
 
@@ -57,14 +64,15 @@ None match.
   - Also keep the `WindowTracker` itself, its `onCount` (which writes the title through `setWorkspaceTitle`, 01_07), the `.vscode/settings.json` watcher, the reopen offer and command, `installTracking` and the `JumpResponder`.
 
   Remove only the client and reporter parts: `started.update(windowFacts())` from the folder handler, `reportFocus` from the window-state subscription (keep the subscription if it still pokes the tracker), the `onDidChangeTabs`/`onDidChangeTabGroups` subscriptions that only call `reportFocus`, and the disposable that calls `focus.dispose()` and `started.close()`. Read the file as it is after 01_05, 01_07 and 02_06 before editing; the line numbers above are from before stage 1.
-- Grep `extension/src` for `aydyClient`, `focusReporter`, `listener.json` and `aydyPortFilePath` afterwards, and `extension/src/extension.ts` for `reported to AYDY`; none may remain.
+- Grep `extension/src` for `aydyClient`, `focusReporter`, `listener.json` and `aydyPortFilePath` afterwards, `extension/src/extension.ts` for `reported to AYDY`, and `extension/README.md` for `reported to AYDY`, `process tree`, `registers`, `matches it against the session titles` and `port file`; none may remain.
 
 ## Verification
 
-- Move the `versionOf` tests into `extension/src/revealSession.test.ts`.
+- Move the `versionOf` assertions (and only those) into `extension/src/revealSession.test.ts`, as described in Background.
 - `yarn test`, `yarn build-tsc` and `yarn lint`.
 - Package check, which must not touch the owner's artifact. `extension/aydy-companion-0.1.0.vsix` is the owner's installable build (gitignored; `extension/README.md:16` tells them to install from it). Do not run `yarn package-extension` (it writes over that file) and do not delete any `.vsix` under `extension/`.
+  0. Record the owner's VSIX mtime before anything else: `stat -f "%Sm" extension/aydy-companion-0.1.0.vsix` (note the output; if the file does not exist, note that instead).
   1. `rm -rf extension/out` so stale compiled files (`out/aydyClient.js`, `out/focusReporter.js`) cannot ship, then `yarn build-extension`.
   2. `mkdir -p <scratchpad>/vsix && cd extension && npx vsce package --no-dependencies --allow-missing-repository --skip-license -o <scratchpad>/vsix/aydy-check.vsix`, where `<scratchpad>` is the session's scratch directory.
   3. `unzip -l <scratchpad>/vsix/aydy-check.vsix` must list `extension/hook/aydy-hook.sh` and `extension/out/uninstall.js`, and must not list `out/aydyClient.js` or `out/focusReporter.js`.
-  4. Delete only `<scratchpad>/vsix/aydy-check.vsix`. Confirm `extension/aydy-companion-0.1.0.vsix` still exists with its original mtime.
+  4. Delete only `<scratchpad>/vsix/aydy-check.vsix`. Run `stat -f "%Sm" extension/aydy-companion-0.1.0.vsix` again and confirm the output equals what step 0 recorded (or that the file is still absent if it was absent).

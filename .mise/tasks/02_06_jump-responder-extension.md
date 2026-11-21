@@ -54,10 +54,11 @@ None match.
 - Unlinking is still the claim, for the brief moment two windows disagree about the window list (one just opened). Only one can act.
 - Requests older than 10 s are stale (the app has given up). Ignore them and do not delete them. The app deletes its own requests on timeout.
 - Never throw from the watcher. Swallow IO errors until the next scan.
+- The `windows` and `launchCwds` defaults touch the real data and `~/.claude/sessions` directories. Only `extension.ts` may rely on them; every test injects both.
 
 ## Verification
 
-- New `extension/src/jumpRequests.test.ts` uses temp dirs and fake timers. It covers:
+- New `extension/src/jumpRequests.test.ts` uses temp dirs and fake timers. Every `JumpResponder` it constructs is given `dir` in a fresh `fs.mkdtemp` directory and explicit `windows` and `launchCwds` fakes. No test relies on the `windows` default (it reads the real `windowsDir()`, and `readWindows` deletes files for dead pids there) or on the `launchCwds` default (it reads the real `~/.claude/sessions`) (spec, "Verification boundary"). Tests may leave `resolveCwd` at its default, which only realpaths the given path. It covers:
   - Parse rejects bad shapes and ids.
   - `shouldHandle` checks ownership and age.
   - Moved session: windows pid 1 at `/a` and pid 2 at `/a/.claude/worktrees/x`; a request whose `cwd` is inside the worktree but whose session's launch `cwd` (injected `launchCwds`) is `/a` is claimed and answered by pid 1 only, with `open` falling back to `/a`. With `launchCwds` returning `null` or no entry, the request's `cwd` decides.

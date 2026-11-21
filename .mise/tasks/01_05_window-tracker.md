@@ -45,7 +45,7 @@ None match.
   - an optional `store` for tests (defaults to the `sessionStore` functions and `knownWindows`, bound to `dirs`): `readStatuses`, `readSeen`, `writeSeen`, `readLiveSessions`, `resolveCwd`, `pruneStale` and `knownWindows`
   - `debounceMs` (default 150) and `pollMs` (default 5000)
 - Methods:
-  - `start()`: `mkdir -p` `dirs.status`, `dirs.seen` and `dirs.windows`, `fs.watch` each (ignoring watch errors, since polling covers them), start the poll interval (unref'd), run `pruneStale` once, and schedule a pass.
+  - `start()`: `mkdir -p` `dirs.status`, `dirs.seen` and `dirs.windows`, `fs.watch` each (ignoring watch errors, since polling covers them), start the poll interval (unref'd), run `pruneStale(await readLiveSessions(), Date.now())` once (both through `store`, bound to `dirs`; `pruneStale(null, ...)` is a no-op per 01_04, so an unreadable `~/.claude/sessions` deletes nothing), and schedule a pass.
   - `poke()`: schedules a debounced pass.
   - `dispose()`.
 - A pass:

@@ -87,7 +87,7 @@ None match.
   - a target whose parent directory does not exist (`<tmp>/a/b/settings.json`): `writeAtomically` and `writeIfUnchanged` with `expected: null` create the directories and the file
   - a dangling symlink whose target is in a missing directory: after the write the link is still a symlink, its target and the target's directory now exist, and the target holds the text
   - no leftover temp files
-- New `extension/src/hookInstall.test.ts` runs against a temp HOME and checks:
+- New `extension/src/hookInstall.test.ts` runs against a temp HOME and checks the items below. Every call passes `paths = {home: <temp dir>, env: {}}`, so `CLAUDE_CONFIG_DIR` is unset and `claudeConfigDir()` can never resolve to a real directory (spec, "Verification boundary"). No test calls `installHookScript`, `ensureHooks` or `removeHooks` without `paths`. It checks:
   - script copied with mode 755, and rewritten only when the source differs
   - `ensureHooks` on a temp HOME with no `.claude/` directory creates `.claude/settings.json` with the five entries
   - `ensureHooks` writes once, then reports `changed:false` with the file mtime untouched

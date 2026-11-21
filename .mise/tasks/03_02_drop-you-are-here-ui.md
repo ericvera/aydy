@@ -9,6 +9,8 @@ Session rows no longer show the "you are here" mark, because the app no longer h
 - src/types/Session.ts
 - src/components/molecules/SessionRow.vue
 - docs/design/menubar-ux.md
+- src/__test__/aSession.ts (test fixture; sets `isCurrent`)
+- src/components/organisms/SessionList.test.ts (test; sets `isCurrent`)
 
 ## Background
 
@@ -48,5 +50,5 @@ Session rows no longer show the "you are here" mark, because the app no longer h
 
 ## Verification
 
-- Update `src/components/molecules/SessionRow.test.ts` to remove the you-are-here cases and assert no such text renders. Fix any other test that sets `isCurrent`.
+- Update `src/components/molecules/SessionRow.test.ts` to remove the you-are-here cases and assert no such text renders. Remove `isCurrent` from `src/__test__/aSession.ts` and from `src/components/organisms/SessionList.test.ts`. `grep -rn isCurrent src` must then return nothing.
 - Run `yarn test`, `yarn build-tsc` and `yarn lint`.

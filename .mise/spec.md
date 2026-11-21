@@ -128,7 +128,7 @@ Logic lives in pure modules with colocated `*.test.ts`, following `revealSession
   - `generatedWorkspacePath(folder)`, where `<hash>` is the first 12 hex characters of the sha256 of the folder's realpath.
   - `isGeneratedWorkspace(uri)`.
   - `buildWorkspace(existing, folder, folderSettings, title)`, which is pure.
-  - `writeWorkspace(...)`, `setWorkspaceTitle(path, title)` and `syncFolderSettings(path, folder)`, which do read-modify-write with an atomic write.
+  - `writeWorkspace(folder, title, dirs?)` (`dirs = {workspaces}`, defaulting to the real `workspacesDir()`; tests always pass a temp dir), `setWorkspaceTitle(path, title)` and `syncFolderSettings(path, folder)`, which do read-modify-write with an atomic write.
 - `reopenOffer.ts`: the once-per-folder offer, keyed in `globalState`, and the reopen action, `vscode.openFolder` with `{forceReuseWindow: true}`.
 - `jumpRequests.ts`: `parseJumpRequest`, `shouldHandle(request, selfPid, windows, now)` (`ownerOf(request.cwd, windows) === selfPid`, ignoring requests older than 10 s; the responder first replaces `request.cwd` with the resolved session directory, `resolveCwd(launch.get(sessionId) ?? request.cwd)`) and a responder class that watches `jump/`.
 
@@ -138,11 +138,12 @@ Generated workspace file:
 {
   "folders": [{ "path": "/abs/folder" }],
   "settings": { "...every key from <folder>/.vscode/settings.json...": "", "window.title": "● 2 okven" },
-  "aydy": { "folder": "/abs/folder", "copiedSettings": ["editor.tabSize"] }
+  "aydy": { "folder": "/abs/folder", "copiedSettings": { "editor.tabSize": 2 } }
 }
 ```
 
-- On re-sync the extension removes the keys previously listed in `aydy.copiedSettings`, adds the folder file's current keys, and keeps `window.title` and anything the user added through the Settings UI.
+- On re-sync the extension removes each key in `aydy.copiedSettings` whose current value still equals the recorded copy, then copies each folder-file key not already present, recording key and value. A key the user edited or added through the Settings UI is never removed or overwritten, and `window.title` is kept.
+- `folders[0]` is the primary folder (`aydy.folder`). Folders the user added through "Add Folder to Workspace" stay on every re-sync.
 - The extension writes the title only in a window whose `vscode.workspace.workspaceFile` is under `<data>/workspaces/`. It writes only when the title changed, and the file is read fresh on every write.
 - The title is literal text, so the `(Workspace)` suffix never appears.
 
@@ -259,10 +260,10 @@ Task files list deletions under "Files to delete". Those do not count toward the
 | 02_08_tracking-status-app.md | `tracking_status` IPC command | src-tauri/src/tracking.rs, src-tauri/src/lib.rs, src-tauri/src/ipc/commands.rs |
 | 02_09_install-extension-screen.md | Install-the-extension screen and popover gate | src/types/TrackingStatus.ts, src/composables/useTracking.ts, src/components/organisms/InstallExtension.vue, src/App.vue, docs/design/menubar-ux.md |
 | 03_01_remove-listener-ui.md | Remove hook, extension-prompt, stale and port-move UI; add the Session tracking row | src/App.vue, src/components/organisms/SettingsPane.vue, src/components/molecules/PopoverHeader.vue, src/composables/useSessions.ts, src/types/SessionList.ts |
-| 03_02_drop-you-are-here-ui.md | Remove `isCurrent` and update the UX doc | src/types/Session.ts, src/components/molecules/SessionRow.vue, docs/design/menubar-ux.md |
+| 03_02_drop-you-are-here-ui.md | Remove `isCurrent` and update the UX doc | src/types/Session.ts, src/components/molecules/SessionRow.vue, docs/design/menubar-ux.md, src/__test__/aSession.ts, src/components/organisms/SessionList.test.ts |
 | 03_03_drop-health-and-hook-ipc.md | Snapshot drops health, port move, stale and extension fields; hook and extension commands go; no not-receiving icon | src-tauri/src/ipc/snapshot_channel.rs, src-tauri/src/ipc/commands.rs, src-tauri/src/tray/icon.rs, src-tauri/src/lib.rs |
 | 03_04_remove-installer.md | Delete the installer, stash, port file and `ListenerHealth`; add the legacy hook cleanup that also deletes the stash file | src-tauri/src/hooks/merge.rs, src-tauri/src/hooks/mod.rs, src-tauri/src/hooks/legacy.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs |
 | 03_05_remove-listener-and-extension-module.md | Delete the listener and the extension registry/channel | src-tauri/src/lib.rs, src-tauri/src/discovery/reconciler.rs, src-tauri/src/discovery/window_map.rs, src-tauri/src/session/event.rs, src-tauri/Cargo.toml |
 | 03_06_remove-window-association.md | Registry and reconciler drop windows; delete window_map and process_tree | src-tauri/src/session/registry.rs, src-tauri/src/session/session.rs, src-tauri/src/discovery/reconciler.rs, src-tauri/src/discovery/mod.rs |
 | 03_07_trim-tab-match-and-events.md | Keep only tab label helpers; drop `WindowId`/`FocusReport` and `SessionSnapshot.is_current` | src-tauri/src/session/tab_match.rs, src-tauri/src/session/event.rs, src-tauri/src/session/registry.rs, src-tauri/src/tray/icon.rs, src-tauri/src/ipc/snapshot_channel.rs |
-| 03_08_extension-drop-loopback.md | Extension drops `AydyClient` and `FocusReporter` | extension/src/extension.ts, extension/src/revealSession.ts, extension/package.json, extension/README.md |
+| 03_08_extension-drop-loopback.md | Extension drops `AydyClient` and `FocusReporter` | extension/src/extension.ts, extension/src/revealSession.ts, extension/package.json, extension/README.md, extension/src/revealSession.test.ts |
