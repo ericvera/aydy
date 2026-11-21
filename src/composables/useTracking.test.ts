@@ -119,6 +119,17 @@ it('stops polling when it is told to', async () => {
   expect(invoked).toHaveLength(1)
 })
 
+it('stays stopped when stopped while a read is in flight', async () => {
+  const tracking = await load({ state: 'notInstalled' })
+
+  const watching = tracking.watch()
+  tracking.stop()
+  await watching
+  await vi.advanceTimersByTimeAsync(10_000)
+
+  expect(invoked).toHaveLength(1)
+})
+
 it('keeps the last answer when a read fails', async () => {
   const tracking = await load({ state: 'hooksMissing' })
   await tracking.read()

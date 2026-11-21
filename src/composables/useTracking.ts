@@ -10,6 +10,7 @@ const POLL_MS = 2000
 // answer.
 const status = ref<TrackingStatus | null>(null)
 let timer: ReturnType<typeof setTimeout> | null = null
+let stopped = false
 
 interface TrackingApi {
   status: Ref<TrackingStatus | null>
@@ -33,6 +34,7 @@ export const useTracking = (): TrackingApi => {
   }
 
   const stop = (): void => {
+    stopped = true
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
@@ -40,7 +42,12 @@ export const useTracking = (): TrackingApi => {
   }
 
   const watch = async (): Promise<void> => {
+    stopped = false
     await read()
+
+    if (stopped) {
+      return
+    }
 
     if (status.value?.state === 'installed') {
       stop()

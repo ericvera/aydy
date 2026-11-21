@@ -1,4 +1,10 @@
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -367,6 +373,7 @@ it('lets only one of two self-declared owners reply', async () => {
 
   expect(reveals).toHaveLength(1)
   expect(readReply(dir)).toEqual({ open: PARENT, reveal: 'revealed' })
+  expect(readdirSync(dir)).toEqual(['jump-1.reply.json'])
 })
 
 it('handles each request once', async () => {

@@ -1,6 +1,7 @@
+import { randomBytes } from 'node:crypto'
 import { watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
-import { mkdir, readdir, readFile, unlink } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { writeAtomically } from './atomicWrite'
@@ -250,8 +251,14 @@ export class JumpResponder {
     if (!shouldHandle(request, this.pid, windows, this.now())) {
       return
     }
+    // A rename claims the request: two windows unlinking it at once can both
+    // succeed on APFS, while only one rename of the same file can.
+    const claimed = join(
+      this.dir,
+      `.${request.id}.${this.pid}.${randomBytes(6).toString('hex')}.claimed`,
+    )
     try {
-      await unlink(path)
+      await rename(path, claimed)
     } catch (error) {
       if (errorCode(error) === 'ENOENT') {
         this.handled.add(request.id)
@@ -260,6 +267,7 @@ export class JumpResponder {
       throw error
     }
     this.handled.add(request.id)
+    await rm(claimed, { force: true })
     const reveal: RevealOutcome =
       request.tabLabel === null
         ? 'notPresent'
