@@ -130,6 +130,8 @@ applies before implementing.
 2. Reopening a plain-folder window from a generated `.code-workspace` happens only at the owner's choice: the extension offers it via a notification with a button, and a command runs it later. Never automatic.
 3. Scope: all three stages in this run — hook script and files plus extension install and tab count; the app switched to reading the files; then the listener, port file, registry, process-tree matching and hook installer removed from the app.
 
+4. The `afplay` sound hooks the old installer stashed are not restored. Sounds belong to AYDY's app; stage 3's legacy cleanup deletes the stash file (`removed-hooks.json`) along with the old `X-Aydy-Hook` entries.
+
 ## Assumptions
 
 - Jump to a session becomes a request file: the app writes it, every extension watches the directory and the one whose window owns the session acts on it. The loopback channel goes away with the listener in stage 3.
