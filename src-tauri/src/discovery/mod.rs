@@ -3,7 +3,9 @@
 //! Hooks report transitions, but they cannot report what happened while AYDY
 //! was not running, and a session that crashes never sends `SessionEnd`. The
 //! second source is `~/.claude/sessions/<pid>.json`: one file per live Claude
-//! process, cross-referenced against the process table.
+//! process, cross-referenced against the process table. [`status_files`]
+//! reads another: the per-session status and seen files under AYDY's data
+//! directory, written by the hook script and the companion extension.
 //!
 //! Two rules hold this module together.
 //!
@@ -31,6 +33,7 @@ pub mod reconciler;
 pub mod repo;
 pub mod resume;
 pub mod session_files;
+pub mod status_files;
 pub mod transcript;
 pub mod window_map;
 
