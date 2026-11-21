@@ -29,14 +29,12 @@
 
 pub mod file_feed;
 pub mod label;
-pub mod process_tree;
 pub mod reconciler;
 pub mod repo;
 pub mod resume;
 pub mod session_files;
 pub mod status_files;
 pub mod transcript;
-pub mod window_map;
 
 #[cfg(test)]
 pub(crate) mod test_support {

@@ -12,7 +12,6 @@ use crate::discovery::label;
 use crate::discovery::repo::{self, RepoIdentity};
 use crate::discovery::session_files::{self, ProcessTable, SessionFile};
 use crate::discovery::transcript::{self, TranscriptCache, TranscriptFacts};
-use crate::discovery::window_map::WindowMap;
 use crate::session::event::{
     DiscoveredSession, ReconciliationResult, SessionEnrichment, SessionId,
 };
@@ -76,8 +75,6 @@ pub struct Scan {
     pub repos: Vec<(SessionId, RepoIdentity)>,
     /// What each session seen has in its transcript.
     pub transcripts: Vec<(SessionId, TranscriptFacts)>,
-    /// Always empty: the scan no longer places sessions in windows.
-    pub windows: WindowMap,
 }
 
 /// The periodic reconciliation scan.
@@ -304,9 +301,6 @@ pub fn scan_and_apply(reconciler: &mut Reconciler, registry: &Mutex<SessionRegis
     let mut registry = lock_recovering(registry);
 
     registry.apply_reconciliation(scan.result);
-    // After the reconciliation, so a session discovered by this very pass is
-    // already in the registry to be placed in its window.
-    registry.apply_window_map(&scan.windows);
 
     for (session_id, fields) in enrichment {
         registry.apply_enrichment(&session_id, fields);

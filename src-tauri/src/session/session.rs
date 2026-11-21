@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::session::event::{HookEventKind, SessionId, WindowId};
+use crate::session::event::{HookEventKind, SessionId};
 use crate::session::status::{SessionStatus, StatusFacts, UNKNOWN_RESOLUTION_WINDOW};
 use crate::session::timing::SessionTiming;
 
@@ -29,11 +29,6 @@ pub struct Session {
     pub worktree: Option<String>,
     pub branch: Option<String>,
     pub jumpable: bool,
-    /// The VS Code window running this session, when the process tree places
-    /// it in one. `None` means nothing proved which window it belongs to —
-    /// never that a window was ruled out — so the reveal that would open a
-    /// duplicate session is never sent.
-    pub window: Option<WindowId>,
     /// When the session's last event, if it was a `Stop` or `Notification`,
     /// was recorded, in epoch ms. Any other event clears it.
     pub attention_at_ms: Option<u64>,
@@ -64,7 +59,6 @@ impl Session {
             worktree: None,
             branch: None,
             jumpable: false,
-            window: None,
             attention_at_ms: None,
             seen_at_ms: None,
             notification_message: None,
