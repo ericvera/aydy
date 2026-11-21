@@ -1,7 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>AYDY mock: VS Code tab count</title><link rel="stylesheet" href="mock.css"></head><body>
 <a class="back" href="index.html">&larr; All screens</a>
 <h1>VS Code window tabs: unread count</h1>
-<p class="page-note">The owner's setup: <code>"window.nativeTabs": true</code>, one window per git worktree, each window a native macOS tab. The tab label is the window title, which the extension writes into a generated <code>.code-workspace</code> file outside the repo. Format: <code>● N folder</code> for two or more unread sessions, <code>● folder</code> for one, <code>○ folder</code> for none. The folder name is written as literal text, so no <i>(Workspace)</i> suffix appears.</p>
+<p class="page-note">The owner's setup: <code>"window.nativeTabs": true</code>, one window per git worktree, each window a native macOS tab. The tab label is the window title, which the extension writes into a generated <code>.code-workspace</code> file outside the repo. Format: <code>● N folder</code> for two to nine unread sessions, <code>● 9+ folder</code> for ten or more, <code>● folder</code> for one, <code>○ folder</code> for none. The folder name is written as literal text, so no <i>(Workspace)</i> suffix appears.</p>
 
 <div class="scenarios" style="flex-direction:column">
 
@@ -62,12 +62,12 @@
 </div>
 
 <div class="scenario">
-  <div class="cap"><b>E. Many unread.</b> The count has no cap; long folder names truncate at the end like any tab label.</div>
+  <div class="cap"><b>E. Many unread: the count caps at 9+.</b> okven has exactly nine unread sessions and reads <code>● 9</code>. okven-very-long-worktree-name-for-feature has twelve and reads <code>● 9+</code>: from ten upward the label stays <code>● 9+ folder</code>, so the tab text stops growing. Long folder names truncate at the end like any tab label.</div>
   <div class="vsc">
     <div class="titlebar"><span class="lights"><i></i><i></i><i></i></span></div>
     <div class="tabs">
-      <div class="tab">● 12 okven-very-long-worktree-name-for-feature</div>
-      <div class="tab">● okven-checkout-fix</div>
+      <div class="tab">● 9 okven</div>
+      <div class="tab">● 9+ okven-very-long-worktree-name-for-feature</div>
       <div class="tab active">○ aydy</div>
     </div>
     <div class="editor"><div class="side"></div><div class="main"></div></div>

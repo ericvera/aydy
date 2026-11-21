@@ -145,8 +145,10 @@ applies before implementing.
 - Mock: the "Install the extension" screen replaces the app's hook-installing Setup screen; install steps assume a VSIX. Settings loses its Hooks section and gains a "Session tracking: Installed" row.
 - Mock: the app drops "you are here", the Reconnecting/stale and port-move notices, and the icon's not-receiving state. A jump no window answers shows "No VS Code window took the jump".
 
+- Mock: the tab count caps at `9+` (10 or more unread shows `● 9+ folder`). The popover header's own count ("5 sessions · 3 new") is not the tab count and stays uncapped.
+
 ## Proposal
 
 Issue: tracking dies with the app closed, and VS Code window tabs show no attention count.
-Approach: hooks run a script that writes per-session status files; the extension installs the hooks, tracks seen state, and writes `● N folder` into a generated workspace file's `window.title` (reopen offered, never forced); the app becomes a file reader, jump moves to a request file, and the listener, registry and installer are removed.
+Approach: hooks run a script that writes per-session status files; the extension installs the hooks, tracks seen state, and writes `● N folder` (capped at `9+`) into a generated workspace file's `window.title` (reopen offered, never forced); the app becomes a file reader, jump moves to a request file, and the listener, registry and installer are removed.
 Skips: none — spec and critic both run (cross-module, user-config writes).
