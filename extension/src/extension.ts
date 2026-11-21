@@ -5,7 +5,7 @@ import * as vscode from 'vscode'
 
 import type { WindowFacts } from './aydyClient'
 import { AydyClient, aydyPortFilePath, versionOf } from './aydyClient'
-import { claudeSettingsPath } from './aydyPaths'
+import { claudeSettingsPath, jumpDir } from './aydyPaths'
 import type { FocusState } from './focusReporter'
 import { FocusReporter } from './focusReporter'
 import {
@@ -14,6 +14,7 @@ import {
   releaseFailureNotice,
 } from './hookNotice'
 import { ensureHooks, installHookScript } from './hookInstall'
+import { JumpResponder } from './jumpRequests'
 import { offerKey, reopenAsWorkspace, shouldOffer } from './reopenOffer'
 import type { RevealEnvironment, RevealRequest } from './revealSession'
 import { revealSession } from './revealSession'
@@ -359,6 +360,17 @@ export const activate = (context: vscode.ExtensionContext): void => {
     },
   })
 
+  const jumps = new JumpResponder({
+    dir: jumpDir(),
+    pid: process.pid,
+    folders: () => folders,
+    open: () => {
+      const file = vscode.workspace.workspaceFile
+      return file?.scheme === 'file' ? file.fsPath : null
+    },
+    reveal: async (request) => revealSession(request, revealEnvironment),
+  })
+
   const generatedPath = generatedWorkspaceFile()
   if (generatedPath === undefined) {
     offerReopen(context, folders).catch(log)
@@ -370,6 +382,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
   context.subscriptions.push(
     { dispose: () => void unpublish() },
     tracker,
+    jumps,
     vscode.commands.registerCommand('aydy.showSessionCountInTabTitle', () =>
       showCountInTabTitle(folders).catch(log),
     ),
@@ -406,6 +419,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
 
   void started.start()
   void tracker.start()
+  void jumps.start()
   reportFocus()
 }
 
