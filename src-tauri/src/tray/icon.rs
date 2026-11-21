@@ -106,7 +106,6 @@ mod tests {
             status,
             unread,
             jumpable: true,
-            is_current: false,
             working_time: Duration::ZERO,
             longest_turn: Duration::ZERO,
             notification_message: None,

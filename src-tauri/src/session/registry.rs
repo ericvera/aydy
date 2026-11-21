@@ -39,7 +39,6 @@ pub struct SessionSnapshot {
     pub status: SessionStatus,
     pub unread: bool,
     pub jumpable: bool,
-    pub is_current: bool,
     pub working_time: Duration,
     pub longest_turn: Duration,
     /// What the session is waiting on, from its most recent notification.
@@ -374,8 +373,6 @@ impl SessionRegistry {
                 status: session.status(),
                 unread: session.unread(),
                 jumpable: session.jumpable,
-                // The field is removed in 03_07.
-                is_current: false,
                 working_time: session.working_time(now),
                 longest_turn: session.longest_turn(),
                 notification_message: session.notification_message.clone(),
