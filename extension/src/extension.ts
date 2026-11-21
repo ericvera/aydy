@@ -12,11 +12,22 @@ import {
 } from './hookNotice'
 import { ensureHooks, installHookScript } from './hookInstall'
 import { JumpResponder } from './jumpRequests'
-import { listReasons, reopenAsWorkspace, unsafeReasons } from './autoReopen'
+import {
+  countActive,
+  listReasons,
+  reopenAsWorkspace,
+  unsafeReasons,
+} from './autoReopen'
 import type { RevealEnvironment } from './revealSession'
 import { revealSession, versionOf } from './revealSession'
 import { tabTitle } from './sessionState'
-import { sessionsUnder } from './processTree'
+import {
+  hasChildren,
+  readLiveSessions,
+  readParents,
+  sessionIdsUnder,
+} from './processTree'
+import { readStatuses } from './sessionStore'
 import { publishWindow, unpublishWindow } from './windowRegistry'
 import { WindowTracker } from './windowTracker'
 import {
@@ -148,6 +159,9 @@ const AUTO_REOPEN_SETTING = 'autoReopenAsWorkspace'
  */
 const SETTLE_MS = 1500
 
+/** How long to wait for a shell pid; a restored terminal may never send one. */
+const TERMINAL_PID_MS = 1000
+
 const REOPEN_ANYWAY = 'Reopen anyway'
 const NOT_NOW = 'Not now'
 const OVERWRITE = 'Overwrite'
@@ -187,21 +201,42 @@ const openWorkspace = async (folder: string): Promise<void> => {
   })
 }
 
-/** What reopening this window now would end, in words; empty when safe. */
-const reasonsNotToReopen = async (): Promise<string[]> =>
-  unsafeReasons({
-    terminals: vscode.window.terminals.length,
-    claudeTabs: vscode.window.tabGroups.all
-      .flatMap((group) => group.tabs)
-      .filter(isClaudeTab).length,
-    claudeSessions: await sessionsUnder(process.pid).catch((error: unknown) => {
+const terminalPid = (terminal: vscode.Terminal): Promise<number | undefined> =>
+  Promise.race([
+    Promise.resolve(terminal.processId),
+    new Promise<undefined>((resolve) =>
+      setTimeout(() => resolve(undefined), TERMINAL_PID_MS),
+    ),
+  ])
+
+const countRunning = async (): Promise<{
+  activeSessions: number
+  busyTerminals: number
+}> => {
+  const parents = await readParents()
+  const pids = await Promise.all(vscode.window.terminals.map(terminalPid))
+  const busyTerminals = pids.filter(
+    (pid) => pid === undefined || hasChildren(pid, parents),
+  ).length
+  const ids = sessionIdsUnder(await readLiveSessions(), process.pid, parents)
+  const activeSessions = countActive(ids, await readStatuses())
+  return { activeSessions, busyTerminals }
+}
+
+/** What reopening this window now would lose, in words; empty when safe. */
+const reasonsNotToReopen = async (): Promise<string[]> => {
+  const running = await countRunning()
+    .then((counts) => ({ ...counts, checkFailed: false }))
+    .catch((error: unknown) => {
       log(error)
-      // Unknown counts as unsafe, so a failed check never ends a session.
-      return 1
-    }),
+      return { activeSessions: 0, busyTerminals: 0, checkFailed: true }
+    })
+  return unsafeReasons({
+    ...running,
     dirtyDocuments: vscode.workspace.textDocuments.filter((doc) => doc.isDirty)
       .length,
   })
+}
 
 const autoReopenEnabled = (): boolean =>
   vscode.workspace
@@ -230,7 +265,7 @@ const autoReopen = async (folder: string): Promise<void> => {
     return
   }
   const choice = await vscode.window.showInformationMessage(
-    `AYDY shows how many Claude Code sessions need you in this window’s tab by reopening it as a workspace. It did not reopen it automatically because reopening would end the ${listReasons(reasons)} open in it.`,
+    `AYDY shows how many Claude Code sessions need you in this window’s tab by reopening it as a workspace. It did not reopen it automatically because this window has ${listReasons(reasons)}.`,
     NOT_NOW,
     REOPEN_ANYWAY,
   )

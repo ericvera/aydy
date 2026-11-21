@@ -29,7 +29,7 @@
         "aydy.autoReopenAsWorkspace": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Reopen a single-folder window as its AYDY workspace file (kept beside the folder, e.g. `~/Code/okven.code-workspace`) as soon as it opens, so its tab can show how many Claude Code sessions need you. A window with terminals, Claude Code sessions or unsaved files is never reopened without asking."
+          "markdownDescription": "Reopen a single-folder window as its AYDY workspace file (kept beside the folder, e.g. `~/Code/okven.code-workspace`) as soon as it opens, so its tab can show how many Claude Code sessions need you. A window is never reopened without asking while a Claude Code session in it is working or waiting on you, a terminal in it is running a process, or it has unsaved files."
         }
       }
     },

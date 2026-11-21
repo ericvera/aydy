@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 
-import { descendsFrom, parseParents, readSessionPids } from './processTree'
+import {
+  descendsFrom,
+  hasChildren,
+  parseParents,
+  readLiveSessions,
+  sessionIdsUnder,
+} from './processTree'
 
 let root: string
 
@@ -48,13 +54,56 @@ it('descendsFrom: stops on a cycle', () => {
   expect(descendsFrom(10, 300, parents)).toBe(false)
 })
 
-it('readSessionPids: keeps live pids and skips dead or broken entries', async () => {
+it("hasChildren: true only for a pid that is some process's parent", () => {
+  const parents = new Map([
+    [980, 412],
+    [412, 300],
+  ])
+  expect(hasChildren(412, parents)).toBe(true)
+  expect(hasChildren(300, parents)).toBe(true)
+  expect(hasChildren(980, parents)).toBe(false)
+  expect(hasChildren(777, parents)).toBe(false)
+})
+
+it('sessionIdsUnder: keeps sessions descending from the root', () => {
+  const parents = new Map([
+    [980, 412],
+    [412, 300],
+    [500, 1],
+  ])
+  expect(
+    sessionIdsUnder(
+      [
+        { pid: 980, sessionId: 'mine' },
+        { pid: 500, sessionId: 'other' },
+        { pid: 777, sessionId: 'unknown' },
+      ],
+      300,
+      parents,
+    ),
+  ).toEqual(['mine'])
+})
+
+it('readLiveSessions: keeps live entries and skips dead, broken or unnamed ones', async () => {
   const dir = join(root, 'sessions')
   mkdirSync(dir)
-  writeFileSync(join(dir, 'a.json'), JSON.stringify({ pid: process.pid }))
-  writeFileSync(join(dir, 'b.json'), JSON.stringify({ pid: 2 ** 22 + 12345 }))
+  const live = { pid: process.pid, sessionId: 'abc-123' }
+  writeFileSync(join(dir, 'a.json'), JSON.stringify(live))
+  writeFileSync(
+    join(dir, 'b.json'),
+    JSON.stringify({ pid: 2 ** 22 + 12345, sessionId: 'dead' }),
+  )
   writeFileSync(join(dir, 'c.json'), '{"pid":')
-  writeFileSync(join(dir, 'd.txt'), JSON.stringify({ pid: process.pid }))
-  expect(await readSessionPids(dir)).toEqual([process.pid])
-  expect(await readSessionPids(join(root, 'missing'))).toEqual([])
+  writeFileSync(join(dir, 'd.txt'), JSON.stringify(live))
+  writeFileSync(join(dir, 'e.json'), JSON.stringify({ pid: process.pid }))
+  writeFileSync(
+    join(dir, 'f.json'),
+    JSON.stringify({ pid: process.pid, sessionId: '../escape' }),
+  )
+  writeFileSync(
+    join(dir, 'g.json'),
+    JSON.stringify({ pid: process.pid, sessionId: 42 }),
+  )
+  expect(await readLiveSessions(dir)).toEqual([live])
+  expect(await readLiveSessions(join(root, 'missing'))).toEqual([])
 })

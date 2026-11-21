@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { claudeSessionsDir } from './aydyPaths'
+import { SESSION_ID_PATTERN } from './sessionState'
 
 /** Parses `ps -axo pid=,ppid=` into a child → parent map. */
 export const parseParents = (text: string): Map<number, number> => {
@@ -34,7 +35,8 @@ export const descendsFrom = (
   return false
 }
 
-const readParents = (): Promise<Map<number, number>> =>
+/** Reads every process's parent from `ps`. */
+export const readParents = (): Promise<Map<number, number>> =>
   new Promise((resolve, reject) => {
     execFile('ps', ['-axo', 'pid=,ppid='], (error, stdout) => {
       if (error !== null) {
@@ -54,45 +56,69 @@ const isAlive = (pid: number): boolean => {
   }
 }
 
-/** The pids of the live Claude Code sessions Claude Code has registered. */
-export const readSessionPids = async (
+export interface LiveSession {
+  pid: number
+  sessionId: string
+}
+
+/** The live Claude Code sessions Claude Code has registered. */
+export const readLiveSessions = async (
   dir: string = claudeSessionsDir(),
-): Promise<number[]> => {
+): Promise<LiveSession[]> => {
   let names: string[]
   try {
     names = (await readdir(dir)).filter((name) => name.endsWith('.json'))
   } catch {
     return []
   }
-  const pids: number[] = []
+  const sessions: LiveSession[] = []
   for (const name of names) {
     try {
       const parsed: unknown = JSON.parse(
         await readFile(join(dir, name), 'utf8'),
       )
-      const pid =
-        typeof parsed === 'object' && parsed !== null && 'pid' in parsed
-          ? parsed.pid
-          : undefined
-      if (typeof pid === 'number' && isAlive(pid)) {
-        pids.push(pid)
+      if (typeof parsed !== 'object' || parsed === null) {
+        continue
+      }
+      const pid = 'pid' in parsed ? parsed.pid : undefined
+      const sessionId = 'sessionId' in parsed ? parsed.sessionId : undefined
+      if (
+        typeof pid === 'number' &&
+        typeof sessionId === 'string' &&
+        SESSION_ID_PATTERN.test(sessionId) &&
+        isAlive(pid)
+      ) {
+        sessions.push({ pid, sessionId })
       }
     } catch {
       continue
     }
   }
-  return pids
+  return sessions
 }
 
 /**
- * How many live Claude Code sessions run under `root` — this window's extension
- * host, which is where the Claude Code extension starts its sessions.
+ * The ids of the sessions running under `root` — this window's extension host,
+ * which is where the Claude Code extension starts its sessions.
  */
-export const sessionsUnder = async (root: number): Promise<number> => {
-  const pids = await readSessionPids()
-  if (pids.length === 0) {
-    return 0
+export const sessionIdsUnder = (
+  sessions: readonly LiveSession[],
+  root: number,
+  parents: ReadonlyMap<number, number>,
+): string[] =>
+  sessions
+    .filter((session) => descendsFrom(session.pid, root, parents))
+    .map((session) => session.sessionId)
+
+/** Whether any process has `pid` as its parent. */
+export const hasChildren = (
+  pid: number,
+  parents: ReadonlyMap<number, number>,
+): boolean => {
+  for (const parent of parents.values()) {
+    if (parent === pid) {
+      return true
+    }
   }
-  const parents = await readParents()
-  return pids.filter((pid) => descendsFrom(pid, root, parents)).length
+  return false
 }

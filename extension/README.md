@@ -102,9 +102,12 @@ Getting a window onto that file means reopening it, which restarts the window:
 
 - **Automatically.** When a single folder is opened as a plain window, AYDY waits a
   moment for VS Code to restore terminals and tabs, then reopens it as its workspace
-  without asking — as long as the window has no terminals, no Claude Code tabs, no Claude
-  Code sessions running under it and no unsaved files. If it has any of those, a
-  notification says which, with **Not now** and **Reopen anyway**. Turn this off with
+  without asking — unless a Claude Code session in it is working or waiting on you, a
+  terminal in it is running a process (a dev server, a build, the Claude Code CLI), or it
+  has unsaved files. Idle terminals at a prompt and idle Claude Code sessions do not
+  block; a restarted session comes back idle. Anything AYDY cannot check counts as
+  running. If something blocks, a notification says what, with **Not now** and
+  **Reopen anyway**. Turn this off with
   the `aydy.autoReopenAsWorkspace` setting.
 - **The command.** `AYDY: Show Session Count in Tab Title` in the command palette does
   the same reopen at any time, without the safety check. It is listed only in a

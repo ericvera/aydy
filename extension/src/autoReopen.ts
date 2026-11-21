@@ -1,3 +1,4 @@
+import type { SessionEvent, SessionStatus } from './sessionState'
 import type { WorkspaceDirs } from './workspaceFile'
 import {
   legacyWorkspacePath,
@@ -7,25 +8,51 @@ import {
   writeWorkspace,
 } from './workspaceFile'
 
-/** What is open in a window that reopening it would end. */
+/** What is running in a window that reopening it would lose. */
 export interface WindowContents {
-  terminals: number
-  claudeTabs: number
-  claudeSessions: number
+  activeSessions: number
+  busyTerminals: number
   dirtyDocuments: number
+  checkFailed: boolean
+}
+
+/** Whether a session whose last hook event is `event` is working or waiting. */
+export const isActive = (event: SessionEvent | undefined): boolean =>
+  event === 'UserPromptSubmit' || event === 'Notification'
+
+/** How many of `sessionIds` are working or waiting; no status means idle. */
+export const countActive = (
+  sessionIds: readonly string[],
+  statuses: readonly SessionStatus[],
+): number => {
+  const events = new Map(
+    statuses.map((status) => [status.sessionId, status.event]),
+  )
+  return sessionIds.filter((id) => isActive(events.get(id))).length
 }
 
 /** Why reopening this window now would lose something; none when safe. */
 export const unsafeReasons = (contents: WindowContents): string[] => {
   const reasons: string[] = []
-  if (contents.claudeTabs > 0 || contents.claudeSessions > 0) {
-    reasons.push('Claude Code sessions')
+  if (contents.activeSessions > 0) {
+    reasons.push(
+      contents.activeSessions === 1
+        ? 'a Claude Code session that is working or waiting on you'
+        : 'Claude Code sessions that are working or waiting on you',
+    )
   }
-  if (contents.terminals > 0) {
-    reasons.push(contents.terminals === 1 ? 'a terminal' : 'terminals')
+  if (contents.busyTerminals > 0) {
+    reasons.push(
+      contents.busyTerminals === 1
+        ? 'a terminal running a process'
+        : 'terminals running processes',
+    )
   }
   if (contents.dirtyDocuments > 0) {
     reasons.push('unsaved files')
+  }
+  if (contents.checkFailed) {
+    reasons.push('processes AYDY could not check')
   }
   return reasons
 }

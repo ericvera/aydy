@@ -13,10 +13,13 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 
 import {
   chooseWorkspacePath,
+  countActive,
+  isActive,
   listReasons,
   reopenAsWorkspace,
   unsafeReasons,
 } from './autoReopen'
+import type { SessionEvent, SessionStatus } from './sessionState'
 import type { WorkspaceDirs } from './workspaceFile'
 import { legacyWorkspacePath, siblingWorkspacePath } from './workspaceFile'
 
@@ -36,32 +39,82 @@ afterEach(() => {
 })
 
 const empty = {
-  terminals: 0,
-  claudeTabs: 0,
-  claudeSessions: 0,
+  activeSessions: 0,
+  busyTerminals: 0,
   dirtyDocuments: 0,
+  checkFailed: false,
 }
 
 it('unsafeReasons: an empty window is safe to reopen', () => {
   expect(unsafeReasons(empty)).toEqual([])
 })
 
-it('unsafeReasons: names what reopening would end', () => {
-  expect(unsafeReasons({ ...empty, claudeTabs: 1 })).toEqual([
-    'Claude Code sessions',
+it('unsafeReasons: names each running thing, singular and plural', () => {
+  expect(unsafeReasons({ ...empty, activeSessions: 1 })).toEqual([
+    'a Claude Code session that is working or waiting on you',
   ])
-  expect(unsafeReasons({ ...empty, claudeSessions: 2 })).toEqual([
-    'Claude Code sessions',
+  expect(unsafeReasons({ ...empty, activeSessions: 2 })).toEqual([
+    'Claude Code sessions that are working or waiting on you',
   ])
-  expect(unsafeReasons({ ...empty, terminals: 1 })).toEqual(['a terminal'])
+  expect(unsafeReasons({ ...empty, busyTerminals: 1 })).toEqual([
+    'a terminal running a process',
+  ])
+  expect(unsafeReasons({ ...empty, busyTerminals: 3 })).toEqual([
+    'terminals running processes',
+  ])
+  expect(unsafeReasons({ ...empty, dirtyDocuments: 1 })).toEqual([
+    'unsaved files',
+  ])
+  expect(unsafeReasons({ ...empty, dirtyDocuments: 2 })).toEqual([
+    'unsaved files',
+  ])
+  expect(unsafeReasons({ ...empty, checkFailed: true })).toEqual([
+    'processes AYDY could not check',
+  ])
+})
+
+it('unsafeReasons: lists everything in order', () => {
   expect(
     unsafeReasons({
-      terminals: 3,
-      claudeTabs: 0,
-      claudeSessions: 1,
-      dirtyDocuments: 2,
+      activeSessions: 1,
+      busyTerminals: 2,
+      dirtyDocuments: 3,
+      checkFailed: true,
     }),
-  ).toEqual(['Claude Code sessions', 'terminals', 'unsaved files'])
+  ).toEqual([
+    'a Claude Code session that is working or waiting on you',
+    'terminals running processes',
+    'unsaved files',
+    'processes AYDY could not check',
+  ])
+})
+
+it('isActive: working and waiting are active, idle is not', () => {
+  expect(isActive('UserPromptSubmit')).toBe(true)
+  expect(isActive('Notification')).toBe(true)
+  expect(isActive('Stop')).toBe(false)
+  expect(isActive('SessionStart')).toBe(false)
+  expect(isActive(undefined)).toBe(false)
+})
+
+it('countActive: joins by session id, treating no status as idle', () => {
+  const status = (sessionId: string, event: SessionEvent): SessionStatus => ({
+    sessionId,
+    event,
+    cwd: null,
+    eventAt: 0,
+  })
+  expect(
+    countActive(
+      ['working', 'waiting', 'idle', 'new'],
+      [
+        status('working', 'UserPromptSubmit'),
+        status('waiting', 'Notification'),
+        status('idle', 'Stop'),
+        status('elsewhere', 'UserPromptSubmit'),
+      ],
+    ),
+  ).toBe(2)
 })
 
 it('listReasons: joins as prose', () => {
