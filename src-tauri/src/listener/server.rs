@@ -12,7 +12,6 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::extension::command::ExtensionCommands;
-use crate::jump::JumpWatch;
 use crate::listener::port::{bind_loopback, PortMemory, PortState};
 use crate::listener::routes::{
     extension_focus, extension_heartbeat, receive_hook, register_extension, unregister_extension,
@@ -42,32 +41,21 @@ pub enum RegistryInput {
 pub struct ListenerState {
     inputs: mpsc::UnboundedSender<RegistryInput>,
     extensions: Arc<ExtensionCommands>,
-    jumps: Arc<JumpWatch>,
 }
 
 impl ListenerState {
-    /// A state that queues registry inputs onto `inputs`, registers windows
-    /// with `extensions`, and answers the jump waiting on `jumps`.
+    /// A state that queues registry inputs onto `inputs` and registers windows
+    /// with `extensions`.
     pub fn new(
         inputs: mpsc::UnboundedSender<RegistryInput>,
         extensions: Arc<ExtensionCommands>,
-        jumps: Arc<JumpWatch>,
     ) -> Self {
-        Self {
-            inputs,
-            extensions,
-            jumps,
-        }
+        Self { inputs, extensions }
     }
 
     /// The registered VS Code windows, and the way back to one of them.
     pub fn extensions(&self) -> &Arc<ExtensionCommands> {
         &self.extensions
-    }
-
-    /// The jump waiting to hear that a window came forward, if one is.
-    pub fn jumps(&self) -> &Arc<JumpWatch> {
-        &self.jumps
     }
 
     /// Queues `input` for the registry and returns.
@@ -183,7 +171,6 @@ pub async fn run(
     ports: Arc<PortState>,
     registry: Arc<Mutex<SessionRegistry>>,
     extensions: Arc<ExtensionCommands>,
-    jumps: Arc<JumpWatch>,
     shutdown: oneshot::Receiver<()>,
 ) {
     let bound = match bind_loopback(memory.remembered()).await {
@@ -208,7 +195,7 @@ pub async fn run(
 
     if let Err(error) = serve(
         bound.listener,
-        ListenerState::new(inputs, extensions, jumps),
+        ListenerState::new(inputs, extensions),
         shutdown,
     )
     .await
@@ -323,7 +310,6 @@ mod tests {
         ports: Arc<PortState>,
         registry: Arc<Mutex<SessionRegistry>>,
         windows: Arc<ExtensionRegistry>,
-        jumps: Arc<JumpWatch>,
         memory: PortMemory,
         shutdown: ListenerShutdown,
         serving: JoinHandle<()>,
@@ -354,13 +340,11 @@ mod tests {
                 Arc::new(LoopbackChannel::new()),
             ));
             let (signal, shutdown) = oneshot::channel();
-            let jumps = Arc::new(JumpWatch::new());
             let serving = tokio::spawn(run(
                 memory.clone(),
                 Arc::clone(&ports),
                 Arc::clone(&registry),
                 extensions,
-                Arc::clone(&jumps),
                 shutdown,
             ));
             let port = tokio::time::timeout(Duration::from_secs(10), ports.wait_for_port())
@@ -373,7 +357,6 @@ mod tests {
                 ports,
                 registry,
                 windows,
-                jumps,
                 memory,
                 shutdown: ListenerShutdown::new(signal),
                 serving,
@@ -1061,47 +1044,6 @@ mod tests {
         listener
             .eventually(|listener| listener.current() == Some("s1".to_string()))
             .await;
-    }
-
-    /// The only confirmation a jump ever gets, over the real endpoint. Nothing
-    /// else can say the window came forward: `code` answers as soon as it has
-    /// handed the folder over, and the reveal answers about a tab.
-    #[tokio::test]
-    async fn a_focus_report_confirms_the_jump_that_was_waiting_for_that_window() {
-        let listener = Harness::start(None).await;
-        let window = FakeWindow::open(65_921).await;
-        listener.register(&window).await;
-        listener.place(65_921, &[("s1", "Fix the auth flow")]);
-        let waiting = listener
-            .jumps
-            .watch(65_921, Some("Fix the auth flow".to_string()));
-
-        listener
-            .post_extension(
-                EXTENSION_FOCUS_PATH,
-                r#"{"pid":65921,"focused":true,"activeTabLabel":"Fix the auth flow"}"#,
-            )
-            .await;
-
-        assert!(waiting.wait(Duration::from_millis(20)));
-    }
-
-    /// Focus is only taken from a window AYDY holds, and so is a confirmation:
-    /// a process claiming to be a window it is not must not be able to make a
-    /// jump report success.
-    #[tokio::test]
-    async fn a_focus_report_from_an_unregistered_window_confirms_no_jump() {
-        let listener = Harness::start(None).await;
-        let waiting = listener.jumps.watch(65_921, None);
-
-        listener
-            .post_extension(
-                EXTENSION_FOCUS_PATH,
-                r#"{"pid":65921,"focused":true,"activeTabLabel":null}"#,
-            )
-            .await;
-
-        assert!(!waiting.wait(Duration::from_millis(20)));
     }
 
     /// The two facts stay two all the way to the registry: a tab in front of a

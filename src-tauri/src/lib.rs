@@ -38,7 +38,7 @@ use crate::ipc::commands::{
     preview_hook_install, quit, reinstall_hooks, reveal_settings_file, uninstall_hooks,
 };
 use crate::ipc::snapshot_channel::{subscribe_sessions, PublisherShutdown, SessionSubscription};
-use crate::jump::{CodeCli, IdeLocks, JumpWatch, Jumper, WindowFolders, WindowRaiser};
+use crate::jump::{CodeCli, JumpRequests, Jumper, WindowRaiser};
 use crate::listener::port::{PortMemory, PortState};
 use crate::listener::server::{ListenerHealth, ListenerShutdown};
 use crate::notify::sound::{SoundNotifier, SystemSoundPlayer};
@@ -140,16 +140,6 @@ pub fn run() {
                 Arc::clone(&windows),
                 Arc::new(LoopbackChannel::new()),
             ));
-            // One watch, held by both ends of a jump: the listener answers it
-            // when the window reports itself in front, and the jump is waiting
-            // on it for exactly that report.
-            let jumps = Arc::new(JumpWatch::new());
-            let jumper = Arc::new(Jumper::new(
-                Arc::clone(&extensions),
-                Arc::new(CodeCli::default()) as Arc<dyn WindowRaiser>,
-                Arc::new(IdeLocks::user()) as Arc<dyn WindowFolders>,
-                Arc::clone(&jumps),
-            ));
             let published = PortFile::new(config.join(PORT_FILE));
             // The settings are loaded before anything that consumes them is
             // spawned, so nothing ever runs against the defaults for the first
@@ -177,6 +167,10 @@ pub fn run() {
             let (publish_signal, publish_shutdown) = tokio::sync::oneshot::channel();
             let (feed_signal, feed_shutdown) = tokio::sync::oneshot::channel();
             let data = DataDir::new(app.path().app_data_dir()?);
+            let jumper = Arc::new(Jumper::new(
+                Arc::new(CodeCli::default()) as Arc<dyn WindowRaiser>,
+                JumpRequests::new(data.jump_dir()),
+            ));
 
             app.manage(Arc::clone(&registry));
             app.manage(data.clone());
@@ -199,7 +193,6 @@ pub fn run() {
                 Arc::clone(&ports),
                 Arc::clone(&registry),
                 extensions,
-                jumps,
                 shutdown,
             ));
             tauri::async_runtime::spawn(follow_port_moves(hooks, Arc::clone(&ports)));

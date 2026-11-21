@@ -250,12 +250,6 @@ pub async fn extension_focus(
         return answered(StatusCode::OK, RegisteredPayload::unregistered());
     }
 
-    // The same report is the only confirmation a jump ever gets. Nothing else
-    // can say the window came forward — `code` answers as soon as it has handed
-    // the folder over, and macOS tells an app nothing about another app's
-    // windows — so a jump waiting on this window is answered here, before the
-    // report is queued for the registry, rather than made to wait behind it.
-    state.jumps().confirm(&focus);
     state.dispatch(RegistryInput::Focus(focus));
 
     answered(StatusCode::OK, RegisteredPayload::registered())

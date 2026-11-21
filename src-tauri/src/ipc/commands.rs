@@ -14,6 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::discovery::reconciler::user_sessions_dir;
+use crate::discovery::session_files::LiveProcesses;
 use crate::discovery::status_files::{write_seen, DataDir};
 use crate::extension::registry::ExtensionRegistry;
 use crate::hooks::install::{ChangePreview, HookInstaller};
@@ -215,11 +217,11 @@ pub fn mark_session_read(
 
 /// Takes the user to a session, which is what clicking a jumpable row does.
 ///
-/// It answers what happened rather than acknowledging the click. Every
-/// mechanism a jump is made of fails silently, so the popover is told whether
-/// the window came forward, whether nothing could be found to raise — which is
-/// a click that goes nowhere and says nothing, not an error — and whether the
-/// reveal opened a tab it should not have.
+/// It answers what happened rather than acknowledging the click: whether the
+/// owning window answered and came forward, whether there was nothing to raise
+/// a window with (a click that goes nowhere and says nothing, not an error),
+/// whether no window answered, and whether the reveal opened a tab it should
+/// not have.
 #[tauri::command]
 pub async fn jump_to_session(
     session_id: String,
@@ -232,17 +234,16 @@ pub async fn jump_to_session(
 
     let jumper = Arc::clone(&jumper);
 
-    // A jump posts to a window, runs a command line and then waits for a
-    // report to arrive, so it runs on a thread that is allowed to wait:
-    // blocking an async worker can starve the runtime's IO driver, which is
-    // what the listener — and therefore the confirmation this is waiting for —
-    // answers on.
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || jumper.jump(&target))
-            .await
-            // A jump that could not even be run is a jump nothing confirmed.
-            .unwrap_or(JumpOutcome::Unconfirmed),
-    )
+    // A jump reads session files, writes a request and polls for its reply,
+    // so it runs on a thread that is allowed to wait, and never while the
+    // registry lock is held.
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        let target = target.with_launch_cwd(user_sessions_dir().as_deref(), &LiveProcesses);
+
+        jumper.jump(&target)
+    })
+    .await
+    .unwrap_or(JumpOutcome::Unanswered))
 }
 
 /// What jumping to `session_id` would have to do, reachable without a Tauri app
@@ -487,11 +488,8 @@ mod tests {
 
     use super::*;
     use crate::clock::TestClock;
-    use crate::discovery::process_tree::FixedParents;
-    use crate::discovery::session_files::SessionFile;
     use crate::discovery::status_files::{read_seen, StatusRecord};
-    use crate::discovery::window_map::associate;
-    use crate::extension::registry::{ExtensionPid, Registration};
+    use crate::extension::registry::Registration;
     use crate::hooks::install::{AddedHook, HookRegistry};
     use crate::hooks::settings_file::SettingsFile;
     use crate::hooks::stash::HookStash;
@@ -834,15 +832,11 @@ mod tests {
         DataDir::new(scratch_dir(name))
     }
 
-    /// The extension host of the window the session below is placed in.
-    const WINDOW: ExtensionPid = 65_921;
-
-    /// A session the scan found in VS Code, the transcript pass titled, and
-    /// the process-tree join placed in a window — built through the same three
-    /// entry points the running app builds it through.
+    /// A session the scan found in VS Code and the transcript pass titled,
+    /// built through the entry points the running app builds it through. A
+    /// jump needs no window placement.
     fn jumpable_session() -> Mutex<SessionRegistry> {
         let mut registry = SessionRegistry::new(Arc::new(TestClock::new()));
-        let claude = 90_001;
 
         registry.apply_hook_event(
             HookEvent::new("session-1", HookEventKind::UserPromptSubmit)
@@ -856,16 +850,6 @@ mod tests {
                 ..SessionEnrichment::default()
             },
         );
-        registry.apply_window_map(&associate(
-            &[SessionFile {
-                pid: claude,
-                session_id: "session-1".to_string(),
-                cwd: None,
-                entrypoint: None,
-            }],
-            &[WINDOW],
-            &FixedParents::new(vec![(claude, WINDOW)]),
-        ));
 
         Mutex::new(registry)
     }
@@ -877,16 +861,15 @@ mod tests {
             .unread()
     }
 
-    /// A session placed in a window by the scan, labelled by the transcript
-    /// pass, and read back out the way the command reads it.
+    /// A session found by the scan, labelled by the transcript pass, and read
+    /// back out the way the command reads it.
     #[test]
-    fn a_jumpable_session_carries_its_window_its_tab_and_its_directory() {
+    fn a_jumpable_session_carries_its_tab_and_its_directory() {
         let registry = jumpable_session();
 
         let target = jump_target(&registry, "session-1").expect("a target");
 
         assert_eq!(target.session_id, "session-1");
-        assert_eq!(target.window, Some(WINDOW));
         assert_eq!(
             target.tab_label,
             Some("Models section configura\u{2026}".to_string())
