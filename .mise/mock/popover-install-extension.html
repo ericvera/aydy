@@ -1,0 +1,58 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>AYDY mock: install the extension</title><link rel="stylesheet" href="mock.css"></head><body>
+<a class="back" href="index.html">&larr; All screens</a>
+<h1>App popover: install the extension</h1>
+<p class="page-note">Replaces the <b>Setup</b> screen that installed hooks. The app no longer installs anything: when the fixed-path hook script or its hook entries are absent, this is the only screen, and like the old first run it has no gear. It clears by itself when the files appear.</p>
+
+<div class="scenarios">
+
+<div class="scenario">
+  <div class="popover">
+    <div class="hdr"><p class="screen-title">Setup</p></div>
+    <div class="body">
+      <div class="center">
+        <p class="lead">Install the AYDY extension in VS Code</p>
+        <p class="sub">The extension tracks your Claude Code sessions, even while this app is closed. AYDY shows what it records.</p>
+      </div>
+      <div class="btns" style="justify-content:center"><button class="btn primary">Show me how</button></div>
+      <div class="in" style="padding:0 16px"><p class="note" style="text-align:center">Already installed? Open any VS Code window and this screen goes away.</p></div>
+    </div>
+  </div>
+  <div class="cap"><b>A. Extension never installed.</b> No hook script at the fixed path.</div>
+</div>
+
+<div class="scenario">
+  <div class="popover">
+    <div class="hdr"><p class="screen-title">Setup</p></div>
+    <div class="body">
+      <div class="center">
+        <p class="lead">Install the AYDY extension in VS Code</p>
+        <p class="sub">The extension tracks your Claude Code sessions, even while this app is closed. AYDY shows what it records.</p>
+      </div>
+      <div style="padding:0 16px 12px;font-size:12px;color:var(--n6)">
+        <ol style="margin:0;padding-left:16px;line-height:1.7">
+          <li>In VS Code, open the Command Palette.</li>
+          <li>Run <b style="color:var(--n7)">Extensions: Install from VSIX…</b></li>
+          <li>Choose <b style="color:var(--n7)">aydy-companion.vsix</b>.</li>
+          <li>Open any project window.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+  <div class="cap"><b>B. After Show me how.</b> Steps inline, in the same screen.</div>
+</div>
+
+<div class="scenario">
+  <div class="popover">
+    <div class="hdr"><p class="screen-title">Setup</p></div>
+    <div class="body">
+      <div class="center">
+        <p class="lead">AYDY's hooks are missing</p>
+        <p class="sub">The extension is installed, but its hooks are not in <b style="color:var(--n6)">~/.claude/settings.json</b>, so sessions are not being recorded. Open any VS Code window and the extension puts them back.</p>
+      </div>
+    </div>
+  </div>
+  <div class="cap"><b>C. Script present, hook entries gone.</b> Someone edited settings.json, or the extension was uninstalled and removed them.</div>
+</div>
+
+</div>
+</body></html>

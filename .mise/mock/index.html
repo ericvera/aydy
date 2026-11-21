@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>AYDY mock: extension core and tab count</title><link rel="stylesheet" href="mock.css"></head><body>
+<h1>AYDY: extension core and tab count</h1>
+<p class="page-note">Static mock of every screen this work touches. VS Code chrome is an approximation; AYDY popover screens use the app's own tokens (dark only, 320px popover).</p>
+<h2 style="font-size:13px;color:var(--n5);text-transform:uppercase">VS Code</h2>
+<ul>
+  <li><a href="vscode-tab-count.html">Window tabs: unread count</a> — <code>● 2 okven</code> / <code>● okven</code> / <code>○ okven</code>, arrival clears, background finish, plain-folder window without a count, long names</li>
+  <li><a href="vscode-reopen-offer.html">Reopen as workspace, and hook install failure</a> — notification offer, command palette entry, after reopen, settings.json error</li>
+</ul>
+<h2 style="font-size:13px;color:var(--n5);text-transform:uppercase">AYDY app popover</h2>
+<ul>
+  <li><a href="popover-sessions.html">Session list read from files</a> — normal, unanswered jump, empty</li>
+  <li><a href="popover-install-extension.html">Install the extension</a> — not installed, install steps, hooks missing</li>
+  <li><a href="popover-settings.html">Settings</a> — without the Hooks section</li>
+</ul>
+<h2 style="font-size:13px;color:var(--n5);text-transform:uppercase">Removed from the app</h2>
+<p class="legend">The hook-installing <b>Setup</b> screen and its change preview, the <b>Hooks</b> settings section, the <b>Add the VS Code extension</b> line under the list, the <b>Reconnecting</b> header and stale-list notice, the port-move notice, and the <i>you are here</i> row mark. The menu bar icon loses its <b>Not receiving</b> state.</p>
+</body></html>

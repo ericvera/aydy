@@ -1,0 +1,66 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>AYDY mock: reopen as workspace</title><link rel="stylesheet" href="mock.css"></head><body>
+<a class="back" href="index.html">&larr; All screens</a>
+<h1>VS Code: offering to reopen a folder window as a workspace</h1>
+<p class="page-note">Reopening is never automatic. A plain-folder window gets a notification with a button; the same thing is available later as a command. The generated workspace file lives under <code>~/Library/Application Support/app.aydy/</code>, one per folder, and carries a copy of the folder's <code>.vscode/settings.json</code> window settings.</p>
+
+<div class="scenarios" style="flex-direction:column">
+
+<div class="scenario">
+  <div class="cap"><b>A. The offer, in a window opened as a plain folder.</b> Shown once per folder on activation. <b>Not now</b> closes it; the command below stays available.</div>
+  <div class="vsc">
+    <div class="titlebar"><span class="lights"><i></i><i></i><i></i></span></div>
+    <div class="tabs"><div class="tab">● 2 okven</div><div class="tab active">routes.rs — okven-api</div></div>
+    <div class="editor" style="height:190px"><div class="side"></div><div class="main">
+      <div class="toast">
+        <div class="msg"><span class="i">ⓘ</span><span>Show how many Claude Code sessions need you in this window's tab? AYDY reopens this window from a workspace file kept outside the repo. This restarts the window, which may end Claude Code sessions open in it.</span></div>
+        <div class="src">Source: AYDY</div>
+        <div class="acts"><button>Not now</button><button class="pri">Reopen as workspace</button></div>
+      </div>
+    </div></div>
+    <div class="status">main</div>
+  </div>
+</div>
+
+<div class="scenario">
+  <div class="cap"><b>B. The command, for later.</b> Only listed in a plain-folder window.</div>
+  <div class="vsc">
+    <div class="titlebar"><span class="lights"><i></i><i></i><i></i></span></div>
+    <div class="tabs"><div class="tab">● 2 okven</div><div class="tab active">routes.rs — okven-api</div></div>
+    <div class="editor" style="height:120px"><div class="side"></div><div class="main">
+      <div class="palette">
+        <div class="in">&gt; AYDY</div>
+        <div class="it sel">AYDY: Show Session Count in Tab Title <span class="k">reopens window</span></div>
+      </div>
+    </div></div>
+    <div class="status">main</div>
+  </div>
+</div>
+
+<div class="scenario">
+  <div class="cap"><b>C. After reopening.</b> Same folder, same editors; the tab now carries the count and the folder name.</div>
+  <div class="vsc">
+    <div class="titlebar"><span class="lights"><i></i><i></i><i></i></span></div>
+    <div class="tabs"><div class="tab">● 2 okven</div><div class="tab active">○ okven-api</div></div>
+    <div class="editor"><div class="side"></div><div class="main">routes.rs</div></div>
+    <div class="status">main</div>
+  </div>
+</div>
+
+<div class="scenario">
+  <div class="cap"><b>D. Hooks could not be installed.</b> Installation is silent when it works. If <code>~/.claude/settings.json</code> cannot be read or written, the window says so once; every other window stays quiet.</div>
+  <div class="vsc">
+    <div class="titlebar"><span class="lights"><i></i><i></i><i></i></span></div>
+    <div class="tabs"><div class="tab active">○ aydy</div></div>
+    <div class="editor" style="height:170px"><div class="side"></div><div class="main">
+      <div class="toast">
+        <div class="msg"><span class="i" style="color:#f14c4c">ⓧ</span><span>AYDY could not add its hooks to ~/.claude/settings.json, so sessions are not being tracked. The file is not valid JSON. Nothing in it was changed.</span></div>
+        <div class="src">Source: AYDY</div>
+        <div class="acts"><button>Open file</button><button class="pri">Try again</button></div>
+      </div>
+    </div></div>
+    <div class="status">main</div>
+  </div>
+</div>
+
+</div>
+</body></html>
