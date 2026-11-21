@@ -124,8 +124,20 @@ applies before implementing.
 12. Stage 1 leaves the app alone: its HTTP entries in HTTP_EVENTS (merge.rs:34) and SessionStart curl (merge.rs:101) stay. Stages 2-3 remove src-tauri/src/listener/, src-tauri/src/port_file.rs, src-tauri/src/extension/registry.rs, src-tauri/src/discovery/process_tree.rs, src-tauri/src/hooks/install.rs, and UI in src/components/organisms/HookSettings.vue and src/components/organisms/ExtensionPrompt.vue.
 13. Nothing in the code contradicts the brief.
 
-## Open questions
+## Decisions
 
-1. Unread rule for the tab count: current per-tab rule, or the simpler window-focus rule?
-2. Reopening a plain-folder window from a generated workspace file restarts its extension host and may kill running Claude sessions there. When may the extension do it?
-3. Scope of this run: all three stages, or stage 1 only?
+1. Unread rule: a session whose Stop or Notification arrives while its window has focus is not counted (window-focus rule, not per-tab). Arriving at a window clears all its sessions.
+2. Reopening a plain-folder window from a generated `.code-workspace` happens only at the owner's choice: the extension offers it via a notification with a button, and a command runs it later. Never automatic.
+3. Scope: all three stages in this run — hook script and files plus extension install and tab count; the app switched to reading the files; then the listener, port file, registry, process-tree matching and hook installer removed from the app.
+
+## Assumptions
+
+- Jump to a session becomes a request file: the app writes it, every extension watches the directory and the one whose window owns the session acts on it. The loopback channel goes away with the listener in stage 3.
+- Status, seen and request files live under the existing app data namespace `~/Library/Application Support/app.aydy/`, created by whichever writer runs first; the hook script must not depend on the app having created it.
+- Liveness for the app comes from matching `session_id` against `~/.claude/sessions/<pid>.json` and checking the pid, as the app does today, unless the planner finds a more reliable source in the hook environment.
+- `Notification` with `idle_prompt` is treated as needs input, like `permission_prompt`.
+- SessionEnd removes the session's status file.
+- The app shows the "install the extension" state when the fixed-path hook script or its hook entries are absent.
+- The "no title API" claim and the claim that workspace-file mode ignores window-level settings from `.vscode/settings.json` are verified against the pinned VS Code API and docs before the title work is built on them.
+- Generated `.code-workspace` files live under the app data namespace, one per folder, outside any repo.
+- The existing app hook entries keep working through stage 1 and are removed by the app-side cleanup in stage 3; the new script entries never carry the `X-Aydy-Hook` marker.
