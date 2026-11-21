@@ -20,12 +20,14 @@ use crate::discovery::status_files::{write_seen, DataDir};
 use crate::extension::registry::ExtensionRegistry;
 use crate::hooks::install::{ChangePreview, HookInstaller};
 use crate::hooks::merge::HookKind;
+use crate::hooks::settings_file::SettingsFile;
 use crate::hooks::HookError;
 use crate::jump::{JumpOutcome, JumpTarget, Jumper};
 use crate::listener::port::PortState;
 use crate::listener::server::ListenerHealth;
 use crate::session::registry::SessionRegistry;
 use crate::sync::lock_recovering;
+use crate::tracking::{tracking_state, TrackingState};
 use crate::tray::popover::{hide, suppress_next_focus_loss, POPOVER_LABEL};
 
 /// How long a command waits for the listener to bind before giving up.
@@ -407,6 +409,30 @@ pub fn connection_payload(windows: &ExtensionRegistry) -> ExtensionStatusPayload
         window_count: windows.window_count(),
         connected: windows.connected(),
     }
+}
+
+/// Whether the extension's session tracking is installed, as the popover reads
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackingStatusPayload {
+    pub state: TrackingState,
+}
+
+/// Whether the extension's hook script and its hooks are in place.
+///
+/// The popover polls this while tracking is not installed, so it costs one
+/// stat and one read of the settings file.
+#[tauri::command]
+pub fn tracking_status(data: State<'_, DataDir>) -> TrackingStatusPayload {
+    let script = data.hook_script();
+    let state = match SettingsFile::user() {
+        Ok(settings) => tracking_state(&script, &settings),
+        Err(_) if script.is_file() => TrackingState::HooksMissing,
+        Err(_) => TrackingState::NotInstalled,
+    };
+
+    TrackingStatusPayload { state }
 }
 
 /// The body of [`hook_status`], reachable without a Tauri app to hold state.

@@ -21,6 +21,7 @@ The app can tell whether the extension's session tracking is installed. It repor
   - Errors are `HookError` (`src-tauri/src/hooks/mod.rs:25`).
 
   This module survives stage 3. Only the installer is removed.
+
 - The command and payload pattern: `ipc/commands.rs` (for example `extension_status` at `:360-380`, with a serde camelCase payload). Commands are registered in `lib.rs:101-116`.
 - States from the mock (`.mise/mock/popover-install-extension.html`):
   - A or B: the script is missing.

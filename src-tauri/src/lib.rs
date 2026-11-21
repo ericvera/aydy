@@ -13,6 +13,7 @@ pub mod settings;
 pub mod sync;
 #[cfg(test)]
 mod test_support;
+pub mod tracking;
 pub mod tray;
 
 use std::sync::{Arc, Mutex};
@@ -35,7 +36,8 @@ use crate::hooks::settings_file::SettingsFile;
 use crate::hooks::stash::HookStash;
 use crate::ipc::commands::{
     close_popover, extension_status, hook_status, install_hooks, jump_to_session, mark_read,
-    preview_hook_install, quit, reinstall_hooks, reveal_settings_file, uninstall_hooks,
+    preview_hook_install, quit, reinstall_hooks, reveal_settings_file, tracking_status,
+    uninstall_hooks,
 };
 use crate::ipc::snapshot_channel::{subscribe_sessions, PublisherShutdown, SessionSubscription};
 use crate::jump::{CodeCli, JumpRequests, Jumper, WindowRaiser};
@@ -114,6 +116,7 @@ pub fn run() {
             uninstall_hooks,
             reveal_settings_file,
             extension_status,
+            tracking_status,
             read_settings,
             update_settings
         ])
