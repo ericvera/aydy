@@ -1,11 +1,9 @@
 pub mod atomic_file;
 pub mod clock;
 pub mod discovery;
-pub mod extension;
 pub mod hooks;
 pub mod ipc;
 pub mod jump;
-pub mod listener;
 pub mod notify;
 pub mod session;
 pub mod settings;
@@ -22,29 +20,20 @@ use tauri_plugin_autostart::MacosLauncher;
 
 use crate::clock::SystemClock;
 use crate::discovery::file_feed::{FeedShutdown, FileFeed};
-use crate::discovery::process_tree::SystemParents;
 use crate::discovery::reconciler::{user_sessions_dir, Reconciler, ScanShutdown};
 use crate::discovery::resume::ResumeShutdown;
 use crate::discovery::session_files::LiveProcesses;
 use crate::discovery::status_files::DataDir;
 use crate::discovery::transcript::user_projects_dir;
-use crate::extension::command::{ExtensionCommands, LoopbackChannel};
-use crate::extension::registry::ExtensionRegistry;
 use crate::hooks::legacy::{remove_legacy_hooks, remove_legacy_stash, LEGACY_STASH_FILE};
 use crate::hooks::settings_file::SettingsFile;
 use crate::ipc::commands::{close_popover, jump_to_session, mark_read, quit, tracking_status};
 use crate::ipc::snapshot_channel::{subscribe_sessions, PublisherShutdown, SessionSubscription};
 use crate::jump::{CodeCli, JumpRequests, Jumper, WindowRaiser};
-use crate::listener::port::{PortMemory, PortState};
-use crate::listener::server::ListenerShutdown;
 use crate::notify::sound::{SoundNotifier, SystemSoundPlayer};
 use crate::session::registry::SessionRegistry;
 use crate::settings::commands::{read_settings, update_settings, Autostart};
 use crate::settings::store::{SettingsStore, SETTINGS_FILE};
-
-/// The file the listener's port is remembered in, inside the app config
-/// directory.
-const PORT_MEMORY_FILE: &str = "listener-port";
 
 /// The app version, as declared in `Cargo.toml` and baked in at compile time.
 pub fn version() -> &'static str {
@@ -60,14 +49,14 @@ pub fn version() -> &'static str {
 /// and therefore no merged `Info.plist`.
 ///
 /// The app is built rather than run directly so that the run event is
-/// available: the hook listener has to be told to stop serving before the
-/// process goes away.
+/// available: the background loops have to be told to stop before the process
+/// goes away.
 pub fn run() {
     let app = tauri::Builder::default()
-        // First, before any plugin that could bind or write something a second
-        // copy would fight over. An instance launched at login and one launched
-        // by hand would otherwise each bind a port and each watch the same
-        // files, applying every session change twice.
+        // First, before any plugin that could write something a second copy
+        // would fight over. An instance launched at login and one launched by
+        // hand would otherwise each watch the same files, applying every
+        // session change twice.
         .plugin(tauri_plugin_single_instance::init(|app, _arguments, _cwd| {
             // Launching AYDY while it is already running is how someone checks
             // that it is: showing the popover answers that, and is the only
@@ -108,16 +97,7 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let registry = Arc::new(Mutex::new(SessionRegistry::new(Arc::new(SystemClock))));
-            let ports = Arc::new(PortState::new());
             let config = app.path().app_config_dir()?;
-            let memory = PortMemory::new(config.join(PORT_MEMORY_FILE));
-            // One VS Code window, one registration, keyed by the extension
-            // host PID it reports — the only identifier a window has.
-            let windows = Arc::new(ExtensionRegistry::new(Arc::new(SystemClock)));
-            let extensions = Arc::new(ExtensionCommands::new(
-                Arc::clone(&windows),
-                Arc::new(LoopbackChannel::new()),
-            ));
             // The settings are loaded before anything that consumes them is
             // spawned, so nothing ever runs against the defaults for the first
             // moments of the app's life and then jumps.
@@ -138,7 +118,6 @@ pub fn run() {
                 Arc::new(SystemClock),
             ));
             let subscription = Arc::new(SessionSubscription::default());
-            let (signal, shutdown) = tokio::sync::oneshot::channel();
             let (scan_signal, scan_shutdown) = tokio::sync::oneshot::channel();
             let (resume_signal, resume_shutdown) = tokio::sync::oneshot::channel();
             let (publish_signal, publish_shutdown) = tokio::sync::oneshot::channel();
@@ -151,26 +130,16 @@ pub fn run() {
 
             app.manage(Arc::clone(&registry));
             app.manage(data.clone());
-            app.manage(Arc::clone(&ports));
-            app.manage(Arc::clone(&windows));
             app.manage(jumper);
             app.manage(settings);
             app.manage(Arc::clone(&subscription));
-            app.manage(ListenerShutdown::new(signal));
             app.manage(ScanShutdown::new(scan_signal));
             app.manage(ResumeShutdown::new(resume_signal));
             app.manage(PublisherShutdown::new(publish_signal));
             app.manage(FeedShutdown::new(feed_signal));
 
-            tauri::async_runtime::spawn(listener::server::run(
-                memory,
-                Arc::clone(&ports),
-                Arc::clone(&registry),
-                extensions,
-                shutdown,
-            ));
-            // Older versions registered hooks that post to the listener, which
-            // is going away, and stashed sound hooks the app now plays itself.
+            // Older versions registered hooks that posted to a listener the app
+            // no longer runs, and stashed sound hooks the app now plays itself.
             let stash = config.join(LEGACY_STASH_FILE);
             tauri::async_runtime::spawn_blocking(move || {
                 let removed = SettingsFile::user().and_then(|file| remove_legacy_hooks(&file));
@@ -213,12 +182,7 @@ pub fn run() {
             match (user_sessions_dir(), user_projects_dir()) {
                 (Some(sessions), Some(projects)) => {
                     tauri::async_runtime::spawn(discovery::reconciler::run(
-                        // The scan is where the session-to-window join runs:
-                        // it already reads every session file, and reading them
-                        // twice could place a session the rest of the pass
-                        // never saw.
-                        Reconciler::new(sessions, projects, Arc::new(LiveProcesses))
-                            .with_windows(windows, Arc::new(SystemParents)),
+                        Reconciler::new(sessions, projects, Arc::new(LiveProcesses)),
                         registry,
                         scan_shutdown,
                     ));
@@ -243,7 +207,6 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => tray::popover::reveal(handle),
         RunEvent::ExitRequested { .. } | RunEvent::Exit => {
-            handle.state::<ListenerShutdown>().trigger();
             handle.state::<ScanShutdown>().trigger();
             handle.state::<ResumeShutdown>().trigger();
             handle.state::<PublisherShutdown>().trigger();

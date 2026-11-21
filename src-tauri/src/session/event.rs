@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use crate::extension::registry::ExtensionPid;
 use crate::session::status::SessionStatus;
 
 /// A Claude Code session id.
@@ -10,13 +9,7 @@ pub type SessionId = String;
 
 /// A VS Code window, named by the process id of the extension host running in
 /// it.
-///
-/// That process id is the window's only identifier, and it is the one name the
-/// registration, the session-to-window join and the command channel all use.
-/// Naming a window differently in any one of them would leave the three unable
-/// to talk about the same window without a conversion that can silently fail to
-/// match.
-pub type WindowId = ExtensionPid;
+pub type WindowId = u32;
 
 /// The five Claude Code hook events the app registers for.
 #[derive(Debug, Clone, PartialEq, Eq)]

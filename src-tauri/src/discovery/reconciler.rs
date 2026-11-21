@@ -9,17 +9,15 @@ use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
 
 use crate::discovery::label;
-use crate::discovery::process_tree::{ProcessParents, SystemParents};
 use crate::discovery::repo::{self, RepoIdentity};
 use crate::discovery::session_files::{self, ProcessTable, SessionFile};
 use crate::discovery::transcript::{self, TranscriptCache, TranscriptFacts};
-use crate::discovery::window_map::{self, WindowMap};
-use crate::extension::registry::ExtensionRegistry;
-use crate::listener::server::lock_recovering;
+use crate::discovery::window_map::WindowMap;
 use crate::session::event::{
-    DiscoveredSession, ReconciliationResult, SessionEnrichment, SessionId, WindowId,
+    DiscoveredSession, ReconciliationResult, SessionEnrichment, SessionId,
 };
 use crate::session::registry::SessionRegistry;
+use crate::sync::lock_recovering;
 
 /// How often the scan runs — and, because the scan is also what sweeps expired
 /// sessions out of the registry, how finely the resolution window can be
@@ -78,8 +76,7 @@ pub struct Scan {
     pub repos: Vec<(SessionId, RepoIdentity)>,
     /// What each session seen has in its transcript.
     pub transcripts: Vec<(SessionId, TranscriptFacts)>,
-    /// The VS Code window running each session seen, for the ones the process
-    /// tree places in a registered window. Empty without the extension.
+    /// Always empty: the scan no longer places sessions in windows.
     pub windows: WindowMap,
 }
 
@@ -103,12 +100,6 @@ pub struct Reconciler {
     /// left is the process it was seen under, and a dead process for a session
     /// with no file is as positive as a dead process for a session with one.
     seen: HashMap<SessionId, u32>,
-    /// The windows the companion extension has registered, or `None` when the
-    /// extension is not part of this scan — which is the shape of every scan on
-    /// a machine that has never installed it.
-    extensions: Option<Arc<ExtensionRegistry>>,
-    /// How a session's process is traced back to the extension host running it.
-    parents: Arc<dyn ProcessParents>,
     /// Whether the scan is currently unable to see anything, so the fallback is
     /// reported when it starts rather than on every pass.
     degraded: bool,
@@ -128,26 +119,8 @@ impl Reconciler {
             transcripts: TranscriptCache::new(),
             processes,
             seen: HashMap::new(),
-            extensions: None,
-            parents: Arc::new(SystemParents),
             degraded: false,
         }
-    }
-
-    /// Joins the sessions this scan sees to the windows registered in
-    /// `extensions`, tracing ancestry through `parents`.
-    ///
-    /// Left off, the scan places no session in any window, which is exactly
-    /// what a machine without the companion extension produces — so the
-    /// no-extension path is the default rather than a case to remember.
-    pub fn with_windows(
-        mut self,
-        extensions: Arc<ExtensionRegistry>,
-        parents: Arc<dyn ProcessParents>,
-    ) -> Self {
-        self.extensions = Some(extensions);
-        self.parents = parents;
-        self
     }
 
     /// Whether the scan can currently see nothing, leaving the app on hook-only
@@ -224,7 +197,6 @@ impl Reconciler {
         }
 
         self.transcripts.retain(&read);
-        scan.windows = self.associate(&live);
 
         let running: HashSet<&str> = live
             .iter()
@@ -274,24 +246,6 @@ impl Reconciler {
         }
 
         scan
-    }
-
-    /// Joins the sessions this pass can see to the windows running them.
-    ///
-    /// Only live sessions are offered: a dead process has no ancestry left to
-    /// read, and a session on its way out of the list has no use for a window.
-    fn associate(&self, live: &[SessionFile]) -> WindowMap {
-        let Some(extensions) = &self.extensions else {
-            return WindowMap::default();
-        };
-
-        let windows: Vec<WindowId> = extensions
-            .registrations()
-            .into_iter()
-            .map(|registration| registration.pid)
-            .collect();
-
-        window_map::associate(live, &windows, &*self.parents)
     }
 
     /// Reports the fallback to hook-only tracking, once per spell of it.
@@ -487,13 +441,11 @@ mod tests {
 
     use super::*;
     use crate::clock::TestClock;
-    use crate::discovery::process_tree::FixedParents;
     use crate::discovery::session_files::FixedProcesses;
     use crate::discovery::test_support::{
         checkout, projects_dir, scratch_dir, session_file, sessions_dir, worktree,
         COMPLETED_TRANSCRIPT, NEVER_PROMPTED_TRANSCRIPT, WORKING_TRANSCRIPT,
     };
-    use crate::extension::registry::Registration;
     use crate::session::event::{HookEvent, HookEventKind};
     use crate::session::status::{SessionStatus, UNKNOWN_RESOLUTION_WINDOW};
 
@@ -1033,62 +985,6 @@ mod tests {
 
         assert_eq!(scan.result.present.len(), 1);
         assert!(!scan.result.present[0].jumpable);
-    }
-
-    /// A registry holding one window, registered under `pid`.
-    fn extension_registry(clock: &Arc<TestClock>, pid: WindowId) -> Arc<ExtensionRegistry> {
-        let registry = Arc::new(ExtensionRegistry::new(clock.clone()));
-        registry.register(Registration {
-            pid,
-            callback_port: 55_123,
-            workspace_folders: vec![PathBuf::from("/Users/eric/Code/aydy")],
-            claude_code_version: Some("2.1.220".to_string()),
-        });
-
-        registry
-    }
-
-    #[test]
-    fn a_scan_places_each_session_it_sees_in_the_window_running_it() {
-        let dir = scratch_dir("window-map");
-        let cwd = checkout(&dir, "aydy");
-        let sessions = sessions_dir(
-            "window-map",
-            &[
-                (11, &session_file(11, "session-a", &cwd, "claude-vscode")),
-                (12, &session_file(12, "session-b", &cwd, "claude-vscode")),
-            ],
-        );
-        let clock = Arc::new(TestClock::new());
-        let registry = registry(&clock);
-        let mut reconciler = reconciler(&sessions, [11, 12]).with_windows(
-            extension_registry(&clock, 65_921),
-            Arc::new(FixedParents::new([(11, 65_921), (12, 400)])),
-        );
-
-        scan_and_apply(&mut reconciler, &registry);
-
-        let registry = lock_recovering(&registry);
-        assert_eq!(registry.window_of("session-a"), Some(65_921));
-        assert_eq!(registry.window_of("session-b"), None);
-    }
-
-    /// Without the extension the scan places nothing, which is the state every
-    /// machine that has never installed it runs in.
-    #[test]
-    fn a_scan_with_no_extension_involved_places_no_session_in_a_window() {
-        let dir = scratch_dir("no-window-map");
-        let cwd = checkout(&dir, "aydy");
-        let sessions = sessions_dir(
-            "no-window-map",
-            &[(11, &session_file(11, "session-a", &cwd, "claude-vscode"))],
-        );
-        let clock = Arc::new(TestClock::new());
-        let registry = registry(&clock);
-
-        scan_and_apply(&mut reconciler(&sessions, [11]), &registry);
-
-        assert_eq!(lock_recovering(&registry).window_of("session-a"), None);
     }
 
     #[test]
