@@ -18,15 +18,15 @@ The VS Code extension stops trying to register with the AYDY app over loopback H
 
 ## Background
 
-- `extension/src/extension.ts:128-182` creates `AydyClient` (port file, register, heartbeat, command server) and `FocusReporter`, and wires `onDidChangeTabs` and `onDidChangeTabGroups` to report focus. `windowFacts`, `focusState` and `activeTabLabel` (`:60-66`, `:102-119`) exist only for them.
-- `deactivate` (`:179-182`) closes the client.
-- `versionOf` (`extension/src/aydyClient.ts:319-327`) is used by `claudeCodeVersion` (`extension.ts:55-56`) and must survive. Move it, with its tests, into `revealSession.ts` and `revealSession.test.ts`.
+- `extension/src/extension.ts:120-170` (`activate` at `:120`) creates `AydyClient` (port file, register, heartbeat, command server) and `FocusReporter`, and wires `onDidChangeTabs` and `onDidChangeTabGroups` to report focus. `windowFacts` (`:52-58`), `activeTabLabel` (`:102-106`) and `focusState` (`:108-111`) exist only for them.
+- `deactivate` (`:171`) closes the client. Since 01_05 it also calls `unpublishWindow(process.pid)`, which must stay.
+- `versionOf` (`extension/src/aydyClient.ts:137`) is used by `claudeCodeVersion` (`extension.ts:47`) and must survive. Move it, with its tests, into `revealSession.ts` and `revealSession.test.ts`.
 - Since stage 1 and 02_06, the extension's real work is in:
   - `installTracking` (01_03)
   - `WindowTracker` (01_05)
   - title and reopen (01_07)
   - `JumpResponder` (02_06)
-- `revealSession.ts:1-29` doc says "AYDY only ever addresses the window its process-tree join placed the session in, and the window checks that the command was addressed to it". That is now false. The window that owns the session's folder claims the jump request by unlinking it.
+- `revealSession.ts:1-29` doc says "AYDY only ever addresses the window its process-tree join placed the session in, and the window checks that the command was addressed to it". That is now false. Only the window that owns the session by the most-specific-folder rule (`ownerOf` in `sessionState.ts`, over the windows published in `<data>/windows/`) claims the jump request, by unlinking it.
 - `package.json` description: "Tells AYDY which Claude Code sessions belong to this VS Code window".
 
 ## Guides
@@ -37,7 +37,7 @@ None match.
 
 - `extension.ts`:
   - Remove the client, the reporter and their helpers and subscriptions.
-  - `deactivate` becomes a no-op, or is removed if VS Code does not need it.
+  - `deactivate` keeps only the `unpublishWindow(process.pid)` call from 01_05.
   - Keep `revealEnvironment` and `isClaudeTab`, because the jump responder uses them.
 - `revealSession.ts`: add `versionOf` and rewrite the guard bullets in the header doc for the request-file path.
 - `package.json` description: "Tracks Claude Code sessions for AYDY and shows how many need you in each window's tab".
@@ -54,4 +54,9 @@ None match.
 ## Verification
 
 - Move the `versionOf` tests into `extension/src/revealSession.test.ts`.
-- `yarn test`, `yarn build-tsc`, `yarn lint` and `yarn package-extension`. The VSIX must contain `hook/aydy-hook.sh` and `out/uninstall.js` (check with `unzip -l extension/*.vsix`, then delete the `.vsix`).
+- `yarn test`, `yarn build-tsc` and `yarn lint`.
+- Package check, which must not touch the owner's artifact. `extension/aydy-companion-0.1.0.vsix` is the owner's installable build (gitignored; `extension/README.md:16` tells them to install from it). Do not run `yarn package-extension` (it writes over that file) and do not delete any `.vsix` under `extension/`.
+  1. `rm -rf extension/out` so stale compiled files (`out/aydyClient.js`, `out/focusReporter.js`) cannot ship, then `yarn build-extension`.
+  2. `mkdir -p <scratchpad>/vsix && cd extension && npx vsce package --no-dependencies --allow-missing-repository --skip-license -o <scratchpad>/vsix/aydy-check.vsix`, where `<scratchpad>` is the session's scratch directory.
+  3. `unzip -l <scratchpad>/vsix/aydy-check.vsix` must list `extension/hook/aydy-hook.sh` and `extension/out/uninstall.js`, and must not list `out/aydyClient.js` or `out/focusReporter.js`.
+  4. Delete only `<scratchpad>/vsix/aydy-check.vsix`. Confirm `extension/aydy-companion-0.1.0.vsix` still exists with its original mtime.

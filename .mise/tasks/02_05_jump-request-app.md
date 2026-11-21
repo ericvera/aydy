@@ -27,6 +27,13 @@ Clicking a session row asks VS Code windows to reveal it by writing a request fi
   - Reply `<id>.reply.json`: `{"open": "<abs path>", "reveal": "revealed"|"notPresent"|"unexpectedVersion"|"duplicated"|"failed"}`.
 - The extension claims a request by unlinking it. Task 02_06 does the extension side.
 - `jump_to_session` and `jump_target`: `ipc/commands.rs:199-238`.
+- Imports in `jump/mod.rs` that must all go, because `listener/` and `extension/` are deleted in 03_05 and `WindowFocus` in 03_07:
+  - `:32` `crate::extension::command::{ExtensionCommands, RevealOutcome}`
+  - `:33` `crate::extension::registry::{ExtensionPid, Registration}`
+  - `:34` `crate::listener::server::lock_recovering` (switch to `crate::sync::lock_recovering`, in the tests too, where the fakes at `:731-827` call it)
+  - `:35` `crate::session::event::WindowId` and the `WindowFocus` part of `:37`
+  - the test module's `crate::extension::command::ExtensionChannel` and `crate::extension::registry::ExtensionRegistry` (`:639-640`)
+- `ipc/commands.rs` test module (`:458-480`) builds its `jumpable_session` fixture (`:801-831`) by placing the session in a window: it imports `crate::discovery::process_tree::FixedParents` (`:465`), `crate::discovery::window_map::associate` (`:467`) and `crate::extension::registry::{ExtensionPid, Registration}` (`:468`), defines `const WINDOW: ExtensionPid` (`:798`), and calls `registry.apply_window_map(&associate(...))` (`:819-828`). `apply_window_map`, `window_map.rs` and `process_tree.rs` are deleted in 03_06, and `extension/` in 03_05, so this fixture must stop using them here.
 
 ## Guides
 
@@ -51,10 +58,13 @@ None match.
   - Stop creating `JumpWatch` and stop passing it to `listener::server::run`.
   - Keep `ExtensionCommands` construction only if the listener still needs it. Otherwise remove it.
 - `server.rs` and `routes.rs`: remove `jumps` from `ListenerState` and the `confirm` call at `routes.rs:329`.
-- `commands.rs`: `jump_target` no longer reads `session.window`, and imports `lock_recovering` from `crate::sync`.
+- `commands.rs`:
+  - `jump_target` no longer reads `session.window`. (Task 02_03 already switched `lock_recovering` to `crate::sync`.)
+  - In the test module, remove the window placement from `jumpable_session`: delete the `apply_window_map(&associate(...))` call, `const WINDOW`, and the `FixedParents`, `associate`, `ExtensionPid` and `Registration` imports (keep `SessionFile` only if something else uses it). Update the fixture's doc comment: the session is found by the scan and titled by the transcript pass, and no window placement is needed for a jump any more.
 
 ## Gotchas
 
+- Parse the reply's `reveal` as a plain string and compare it with `"duplicated"`. Do not import `RevealOutcome` from `crate::extension`.
 - The reply's `open` path comes from another process. Pass it to `CodeCli::raise` as a path argument only, as today, and never through a shell.
 - Delete the reply after reading it, and the request on timeout, so the jump dir does not grow.
 - The frontend still knows `raised` and `unconfirmed`. Task 02_07 updates it, and the build stays green in between because the types are runtime strings.
@@ -69,4 +79,6 @@ None match.
   - no `code` CLI gives `NoWindow` and writes nothing
   - a malformed reply gives `Unanswered`
 - Keep the `JumpTarget::of` tests, minus `window`.
+- The `commands.rs` jump tests that use `jumpable_session` still pass without the window placement.
+- Grep `jump/mod.rs` and the `commands.rs` test module for `extension::`, `listener::`, `ExtensionPid`, `WindowId`, `WindowFocus`, `FixedParents`, `window_map` and `apply_window_map`. None may remain.
 - Run `cargo test` and `cargo clippy` from `src-tauri/`.

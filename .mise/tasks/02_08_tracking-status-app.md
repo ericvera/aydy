@@ -18,7 +18,7 @@ The app can tell whether the extension's session tracking is installed. It repor
 - Reading the settings file: `src-tauri/src/hooks/settings_file.rs`.
   - `SettingsFile::user()` (`:131`) honours `CLAUDE_CONFIG_DIR`.
   - `read()` (`:144`) returns a `SettingsSnapshot` with `value()`.
-  - Errors are `HookError` (`src-tauri/src/hooks/mod.rs:510`).
+  - Errors are `HookError` (`src-tauri/src/hooks/mod.rs:25`).
 
   This module survives stage 3. Only the installer is removed.
 - The command and payload pattern: `ipc/commands.rs` (for example `extension_status` at `:360-380`, with a serde camelCase payload). Commands are registered in `lib.rs:101-116`.

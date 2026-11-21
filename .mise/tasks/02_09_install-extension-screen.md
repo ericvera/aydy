@@ -19,7 +19,8 @@ When session tracking is not installed, the popover shows the "Install the AYDY 
   - It routes `FirstRun` when `status !== null && !status.installed` (the hook status from `useHookStatus`).
   - The list and settings branches are gated on `status !== null`.
   - `SettingsUnreadable` shows when the hook status read failed (`App.vue:150-234`).
-  - `onMounted` calls `subscribe()` and `refresh()`.
+  - `onMounted` calls `subscribe()` and `refresh()` (`App.vue:58-60`).
+  - There is no hook for the popover opening. The popover's DOM is never unmounted: it is shown and hidden, and it hides on focus loss (comment at `App.vue:62-77`), so it gains focus each time it opens.
 - After this task, `useHookStatus` stays in use **only** for the Settings pane's hook section. Task 03_01 removes it.
 - Composable pattern: module-scoped refs plus `invoke` (`src/composables/useExtension.ts`, `src/composables/useSettings.ts`), with tests mocking `@tauri-apps/api/core` (`src/composables/useExtension.test.ts`).
 - Screen pattern: `src/components/organisms/FirstRun.vue` (ScreenHeader titled "Setup", no gear, ActionButton, Banner). Its test is `FirstRun.test.ts`, with helpers in `src/__test__/`.
@@ -43,7 +44,7 @@ When session tracking is not installed, the popover shows the "Install the AYDY 
 - `TrackingStatus.ts`: `export type TrackingState = 'installed' | 'notInstalled' | 'hooksMissing'` and `export interface TrackingStatus { state: TrackingState }`.
 - `useTracking.ts`, with module-scoped `status: Ref<TrackingStatus | null>`:
   - `read()` invokes `tracking_status`. A failure leaves the previous value and records nothing, because the app cannot do anything about it.
-  - `watch()` reads now, then every 2000 ms while the state is not `installed`, and stops polling once it is installed.
+  - `watch()` reads now, then every 2000 ms while the state is not `installed`, and stops polling once it is installed. Calling it while a poll is already scheduled does not start a second timer.
   - `stop()`.
 - `InstallExtension.vue`:
   - Prop `state: 'notInstalled' | 'hooksMissing'`.
@@ -54,6 +55,7 @@ When session tracking is not installed, the popover shows the "Install the AYDY 
   - Route `InstallExtension` when `tracking.status !== null && tracking.status.state !== 'installed'`.
   - Gate the list and settings branches on `tracking.status?.state === 'installed'` instead of the hook status.
   - Remove the `FirstRun` and `SettingsUnreadable` branches and their imports and handlers (`install`, `plan`, `revealSettingsFile`). Keep the rest of `useHookStatus` only as the SettingsPane props need it. When `status` is still null, pass the props the pane accepts as optional, or leave the pane branch gated on both.
+  - Re-check tracking each time the popover opens: on mount, add a `window` `focus` listener that calls `useTracking().watch()` (remove it on unmount). Once installed, polling stops, and without this the app would keep a frozen list after the extension is uninstalled. A read that comes back `notInstalled` or `hooksMissing` switches to the install screen and resumes polling.
   - Also re-read tracking when settings open.
 - `menubar-ux.md`: rewrite the Setup section for the install screen and its three states. The app installs nothing, and the screen clears itself.
 
@@ -65,7 +67,7 @@ When session tracking is not installed, the popover shows the "Install the AYDY 
 
 ## Verification
 
-- New `src/composables/useTracking.test.ts`: `read` sets the status, polling continues while not installed and stops once installed (fake timers), and a failed invoke keeps the last value.
+- New `src/composables/useTracking.test.ts`: `read` sets the status, polling continues while not installed and stops once installed (fake timers), calling `watch()` twice does not double the polling, and a failed invoke keeps the last value.
 - New `src/components/organisms/InstallExtension.test.ts`: state A copy and the Show me how reveal, the B steps, and the state C copy.
-- Update `src/App.test.ts`: notInstalled shows the install screen and no list, installed shows the list, and the FirstRun cases are removed.
+- Update `src/App.test.ts`: notInstalled shows the install screen and no list, installed shows the list, and the FirstRun cases are removed. Add: after installed, with polling stopped, the mock returns `notInstalled` and `window.dispatchEvent(new Event('focus'))` brings up the install screen.
 - Run `yarn test`, `yarn build-tsc` and `yarn lint`.

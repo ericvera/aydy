@@ -22,7 +22,7 @@ Give the app a reader for the per-session status files the hook script writes an
   - `into_event`, which maps `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop` and `SessionEnd` to `HookEventKind` (`src-tauri/src/session/event.rs:22-44`).
   - `present`, which treats blank strings as absent.
 - The atomic writer is `src-tauri/src/atomic_file.rs:29` (`write_atomically(path, contents)`).
-- Test scratch dirs: `src-tauri/src/test_support.rs` (`scratch_dir`) and `src-tauri/src/discovery/mod.rs:327-364`.
+- Test scratch dirs: `src-tauri/src/test_support.rs` (`scratch_dir`) and the `test_support` module at `src-tauri/src/discovery/mod.rs:38`.
 
 ## Guides
 

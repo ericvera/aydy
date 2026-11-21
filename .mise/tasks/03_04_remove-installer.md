@@ -2,7 +2,7 @@
 
 ## Goal
 
-The app no longer installs hooks or publishes a port. On every start it removes its old HTTP and curl hook entries from the user's Claude settings, writing only when some are present, so stale entries stop firing at a listener that is about to disappear.
+The app no longer installs hooks or publishes a port. On every start it removes its old HTTP and curl hook entries from the user's Claude settings, writing only when some are present, so stale entries stop firing at a listener that is about to disappear. It also deletes the old installer's stash file `removed-hooks.json` without restoring the `afplay` hooks stashed in it.
 
 ## Files to modify/create
 
@@ -20,13 +20,13 @@ The app no longer installs hooks or publishes a port. On every start it removes 
 
 ## Background
 
-- The extension now owns hook installation (stage 1). Task 03_03 removed the installer's IPC commands and `ListenerHealth`.
+- The extension now owns hook installation (stage 1). Task 03_03 removed the installer's IPC commands and stopped creating `ListenerHealth`, but left the type in `listener/server.rs` (`:278-300`) because the `hooks/install.rs` tests (`:511`, `:1077-1112`) construct it. This task deletes both.
 - What still uses the installer and port file is all in `lib.rs`:
   - `HookInstaller`, `HookStash`, `HookRegistry` (`:127-131`)
   - `follow_port_moves` (`:194`)
   - `PortFile`, `publish_port` (`:150`, `:199`)
   - the exit-time `PortFile::withdraw` (`:258`)
-  - the constants `REMOVED_HOOKS_FILE` (`:53`) and `PORT_FILE`
+  - the constants `REMOVED_HOOKS_FILE` (`:53`, `"removed-hooks.json"`, joined onto `app.path().app_config_dir()` at `:129`) and `PORT_FILE`
 - `hooks/merge.rs`:
   - `is_aydy_hook` (`:468-482`) identifies legacy entries: an http hook with header `X-Aydy-Hook`, or a command containing it.
   - `remove_aydy_hooks(hooks: &mut Map<String, Value>) -> usize` (`:171`).
@@ -36,8 +36,8 @@ The app no longer installs hooks or publishes a port. On every start it removes 
   - `SettingsFile::user()` (`:131`)
   - `read()` (`:144`)
   - `write(&snapshot, &value)` (`:186`), which is atomic and aborts if the file changed on disk
-- `listener/server.rs`: `RegisteredHooks` and `HookRegistration` (`:261-276`) exist only for the installer.
-- Spec decision (`.mise/spec.md`, "Hook entries"): the cleanup does **not** restore the `afplay` entries the old installer stashed in `removed-hooks.json`. The app keeps playing those sounds itself. Leave the stash file on disk.
+- `listener/server.rs`: `RegisteredHooks` and `HookRegistration` (`:261-276`) exist only for the installer, and `ListenerHealth` (`:278-300`, with its test helper `health` at `:975-982`) only for the health snapshot 03_03 removed.
+- Owner decision 4 (`.mise/goals.md`, Decisions): the `afplay` sound hooks the old installer stashed are not restored. Sounds belong to the app, and restoring them would double every sound. Stage 3's legacy cleanup deletes the stash file `removed-hooks.json` along with the old `X-Aydy-Hook` entries.
 
 ## Guides
 
@@ -56,12 +56,13 @@ None match.
   3. Clone the value and run `remove_aydy_hooks` on its `hooks` object.
   4. If the count is 0, return 0 **without writing**.
   5. Otherwise drop events that became empty, drop `hooks` if it became empty, and `write`.
+- `legacy.rs`: `pub const LEGACY_STASH_FILE: &str = "removed-hooks.json"` and `pub fn remove_legacy_stash(path: &Path) -> io::Result<bool>`, which runs `fs::remove_file` and returns `Ok(true)` when it deleted the file and `Ok(false)` on `NotFound`. It never reads the file and never restores anything from it.
 - `hooks/mod.rs`: modules become `legacy`, `merge` and `settings_file`. Update the module doc. Keep `HookError` and `test_support`.
 - `lib.rs`:
   - Remove the installer, stash, registry, port file and port publisher wiring and their constants.
-  - At setup, spawn on the blocking pool: `SettingsFile::user().and_then(|f| remove_legacy_hooks(&f))`, logging errors with `eprintln!("aydy: ...")`.
+  - At setup, spawn on the blocking pool: `SettingsFile::user().and_then(|f| remove_legacy_hooks(&f))`, then `remove_legacy_stash(&config.join(LEGACY_STASH_FILE))` regardless of the first result, logging each error with `eprintln!("aydy: ...")`. `config` is `app.path().app_config_dir()?`, the directory the stash lived in.
   - The listener itself keeps running until 03_05.
-- `server.rs`: delete `RegisteredHooks` and `HookRegistration` and anything that only they used.
+- `server.rs`: delete `RegisteredHooks`, `HookRegistration` and `ListenerHealth`, their tests and test helpers, and anything that only they used.
 
 ## Gotchas
 
@@ -70,15 +71,18 @@ None match.
   - never touch entries containing `app.aydy/bin/aydy-hook.sh`, which belong to the extension
   - never touch `afplay` entries
   - abort when the file changed on disk, which `settings_file::write` already does
+- Deleting `removed-hooks.json` is one-way: the stashed `afplay` entries cannot be restored afterwards. That is the owner's decision. Do not read, log or restore its contents.
 - `atomic_file.rs` loses `port_file` as a user. It is still used by `settings_file.rs`, `settings/store.rs` and `discovery/status_files.rs`.
 
 ## Verification
 
-- New tests in `legacy.rs` using `hooks::test_support::settings_fixture` and `REAL_SETTINGS` (`hooks/mod.rs:579-680`), with legacy http and curl entries added. Check:
+- New tests in `legacy.rs` using `hooks::test_support::settings_fixture` (`hooks/mod.rs:190`) and `REAL_SETTINGS` (`hooks/mod.rs:94`), with legacy http and curl entries added. Check:
   - they are removed and the user's `afplay` hooks and the extension's `aydy-hook.sh` entries are untouched
   - other keys are byte-identical through `render`
   - a file with no legacy entries is not rewritten (mtime unchanged)
   - a missing file returns 0
   - malformed JSON returns an error and leaves the file unchanged
+  - `remove_legacy_stash` deletes a scratch `removed-hooks.json` and returns true, returns false when it is absent, and the settings file is not touched by it
 - Keep the `merge.rs` tests for `is_aydy_hook` and `remove_aydy_hooks`.
+- Grep `src-tauri/src` for `ListenerHealth`, `HookInstaller`, `HookStash`, `RegisteredHooks` and `port_file`; none may remain.
 - Run `cargo test` and `cargo clippy` from `src-tauri/`.

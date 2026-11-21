@@ -22,7 +22,9 @@ Move the shared mutex helper `lock_recovering` out of the HTTP listener and into
   - `notify/sound.rs:20`
   - `tray/popover.rs:9`
   - `ipc/snapshot_channel.rs:24`
-  - `ipc/commands.rs:20`
+  - `ipc/commands.rs:23`
+  - inside modules that are deleted later: `extension/registry.rs:9`, `extension/command.rs:330` (test module) and `hooks/install.rs:20`. These stay on the re-export until their files are deleted (03_05 and 03_04).
+- Which task switches each remaining importer: 02_03 (`notify/sound.rs`, `ipc/commands.rs`), 02_05 (`jump/mod.rs`), 03_03 (`ipc/snapshot_channel.rs`), 03_05 (`discovery/reconciler.rs`).
 - Plan (`.mise/spec.md`, "App"): the server re-exports the helper so the remaining importers keep compiling. Every later task that touches one of them switches its import to `crate::sync::lock_recovering`. Listener deletion (03_05) removes the re-export.
 
 ## Guides

@@ -12,7 +12,7 @@ Add the shell script that Claude Code hooks run. It writes one status file per s
 ## Background
 
 - Repo: AYDY, a macOS menu bar app (Tauri, `src-tauri/`) plus a companion VS Code extension (`extension/`). This work moves session tracking into files written by hooks, so tracking works with the app closed. The full design is in `.mise/spec.md` under "Shared files" and "Hook script".
-- The data directory is `~/Library/Application Support/app.aydy/` (`extension/src/aydyClient.ts:194` and `:282` build the same base). Below it is `<data>`.
+- The data directory is `~/Library/Application Support/app.aydy/` (`extension/src/aydyClient.ts:12` and `:101` build the same base). Below it is `<data>`.
 - The script ships in the VSIX, so it must live outside `extension/src/`: `extension/.vscodeignore:4` excludes `src/**`. `extension/hook/` is not excluded.
 - Claude Code passes the hook payload as JSON on stdin. The fields used are `session_id`, `hook_event_name`, `cwd`, `transcript_path`, `message` and `notification_type` (`src-tauri/src/listener/routes.rs:41-56`).
 - Pure-module pattern with a colocated test: `extension/src/revealSession.ts` / `revealSession.test.ts`. Tests run under vitest (`vitest.config.ts:19` includes `extension/src/**/*.test.ts`).
@@ -48,7 +48,7 @@ exit 0
 `extension/src/aydyPaths.ts` exports pure functions. Each takes an optional `{home?: string, env?: NodeJS.ProcessEnv}` so tests never touch the real home:
 
 - `aydyDataDir()` returns `<home>/Library/Application Support/app.aydy`.
-- `statusDir()`, `seenDir()`, `jumpDir()`, `workspacesDir()`, `noticesDir()` and `binDir()` return the matching subdirectories.
+- `statusDir()`, `seenDir()`, `jumpDir()`, `windowsDir()`, `workspacesDir()`, `noticesDir()` and `binDir()` return the matching subdirectories. `windowsDir()` holds one `<pid>.json` per open VS Code window, which task 01_04 reads and writes.
 - `hookScriptPath()` returns `<binDir>/aydy-hook.sh`.
 - `claudeConfigDir()` returns `CLAUDE_CONFIG_DIR` when it is set and non-empty, otherwise `<home>/.claude`.
 - `claudeSettingsPath()` returns `<config>/settings.json`.

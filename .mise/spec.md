@@ -4,7 +4,7 @@
 
 - Claude Code hooks run a small shell script installed by the VS Code extension. The script writes one status file per session. It works with neither the AYDY app nor VS Code running.
 - Each VS Code window shows how many of its sessions are unread in its tab title: `○ okven` for none, `● okven` for one, `● N okven` for 2 to 9, `● 9+ okven` for 10 or more. The name is the folder name written as literal text.
-- A session belongs to a window when its `cwd` is inside one of the window's workspace folders. It is unread when its last event was `Stop` or `Notification` and that event is newer than its last seen time.
+- A session belongs to exactly one window. Of all open windows with a workspace folder that contains the session's `cwd`, the owner is the one whose containing folder is the most specific (longest). Ties go to the lowest window pid. Each window publishes its folders in `<data>/windows/<pid>.json`, so every extension can tell whether a more specific window exists. The tab count, marking seen on focus, and claiming a jump all use this one rule. A session is unread when its last event was `Stop` or `Notification` and that event is newer than its last seen time.
 - A focused window marks all of its sessions seen, both when it gains focus and whenever one of its sessions changes while it has focus. So arriving at a window clears its count, and a session that finishes while its window has focus is never counted (owner decision 1).
 - The title can only be written into a `.code-workspace` file. For a window opened as a plain folder, the extension generates one outside the repo. It offers to reopen the window from that file once per folder, and the command `AYDY: Show Session Count in Tab Title` does the same later. It never reopens on its own (owner decision 2). The generated file carries a copy of the folder's `.vscode/settings.json` and is re-synced when that file changes. Windows opened from the user's own `.code-workspace` get no title.
 - The app becomes a reader. It builds its list from the status and seen files, and hides sessions whose process is not alive. A jump writes a request file that the owning window answers. When the hook script or its entries are missing, the app shows an "Install the extension" screen instead of the list.
@@ -15,7 +15,7 @@
 
 ### Shared files
 
-Everything lives under `~/Library/Application Support/app.aydy/`, the app's existing data and config directory (`src-tauri/tauri.conf.json:5`, `extension/src/aydyClient.ts:282`). Below it is called `<data>`. Every writer creates the directories it needs with `mkdir -p` / `recursive: true`, and nothing depends on the app having run.
+Everything lives under `~/Library/Application Support/app.aydy/`, the app's existing data and config directory (`src-tauri/tauri.conf.json:5`, `extension/src/aydyClient.ts:12` and `:101`). Below it is called `<data>`. Every writer creates the directories it needs with `mkdir -p` / `recursive: true`, and nothing depends on the app having run.
 
 | Path | Writer | Content |
 | --- | --- | --- |
@@ -24,10 +24,13 @@ Everything lives under `~/Library/Application Support/app.aydy/`, the app's exis
 | `<data>/seen/<session_id>.json` | extension (focus), app (`mark_read`) | `{"seenAt": <epoch ms>}` |
 | `<data>/jump/<id>.json` | app | `{"id": string, "sessionId": string, "cwd": string, "tabLabel": string \| null, "requestedAt": <epoch ms>}` |
 | `<data>/jump/<id>.reply.json` | extension that claimed `<id>` | `{"open": <absolute path to raise>, "reveal": RevealOutcome}` |
+| `<data>/windows/<pid>.json` | the extension host of one VS Code window (`pid` = its `process.pid`), on activation and on folder changes; deleted on dispose, and by any reader that finds the pid dead | `{"pid": <number>, "folders": [<realpath>, ...]}` |
 | `<data>/workspaces/<hash>/<folder name>.code-workspace` | extension | generated workspace, see below |
 | `<data>/notices/hook-install-failed` | extension | empty marker created with flag `wx`, so only one window shows the failure |
 
 All JSON writes are atomic: write a temp file in the same directory, then rename it. The script uses `mv -f`. The extension uses `extension/src/atomicWrite.ts`. Rust uses `src-tauri/src/atomic_file.rs:29`.
+
+Like the Rust writer (`atomic_file.rs:57-59`), the extension's writer keeps the target's existing permissions when no mode is given, so rewriting a 0600 `~/.claude/settings.json` (which can hold `env` secrets) never widens it to the umask default. When the target is a symlink (dotfiles managers), it resolves the link and writes to the real path, so the link survives.
 
 ### Hook script (`extension/hook/aydy-hook.sh`)
 
@@ -70,28 +73,35 @@ f="$HOME/Library/Application Support/app.aydy/bin/aydy-hook.sh"; [ -f "$f" ] && 
 - A missing file is treated as `{}`. Invalid JSON is never written over and is reported.
 - Uninstall (`vscode:uninstall`) removes every marker entry and drops groups and events that end up empty. It leaves the script in place, which matches mock state C.
 - The app's legacy HTTP and curl entries stay in place through stages 1 and 2. They are removed in stage 3 by a one-time-per-start cleanup in the app (`hooks/legacy.rs`), which strips entries matching `merge::is_aydy_hook`.
-- That cleanup does **not** restore the `afplay` entries the old installer stashed in `removed-hooks.json`. The app keeps playing those sounds itself, and restoring them would double every sound. The stash file is left on disk.
+- That cleanup does **not** restore the `afplay` entries the old installer stashed in `removed-hooks.json` (owner decision 4). Sounds belong to the app, and restoring them would double every sound. The cleanup deletes the stash file `<app config dir>/removed-hooks.json`.
 
 ### Extension modules (`extension/src/`)
 
-Logic lives in pure modules with colocated `*.test.ts`, following `revealSession.ts` and `focusReporter.ts`. The `vscode` API is touched only in `extension.ts` and in thin environment objects passed in, as with `revealEnvironment` at `extension.ts:75`.
+Logic lives in pure modules with colocated `*.test.ts`, following `revealSession.ts` and `focusReporter.ts`. The `vscode` API is touched only in `extension.ts` and in thin environment objects passed in, as with `revealEnvironment` at `extension.ts:67-92`.
 
-- `aydyPaths.ts`: `aydyDataDir()` and the derived dirs and paths, `claudeConfigDir()`, `claudeSessionsDir()`, `claudeSettingsPath()`, and `HOOK_SCRIPT_MARKER`.
-- `atomicWrite.ts`: `writeAtomically(path, text, mode?)` and `writeIfUnchanged(path, expected, text)`.
+- `aydyPaths.ts`: `aydyDataDir()` and the derived dirs and paths (including `windowsDir()`), `claudeConfigDir()`, `claudeSessionsDir()`, `claudeSettingsPath()`, and `HOOK_SCRIPT_MARKER`.
+- `atomicWrite.ts`: `writeAtomically(path, text, mode?)` and `writeIfUnchanged(path, expected, text)`. Both resolve a symlinked target to its real path, and without a `mode` both copy the existing target's permissions onto the temp file before the rename.
 - `hookSettings.ts`: pure JSON transforms, `hookCommand()`, `HOOK_EVENTS`, `hasAllHooks(doc)`, `withAydyHooks(doc)` and `withoutAydyHooks(doc)`.
 - `hookInstall.ts`: the IO steps `installHookScript(extensionPath)`, `ensureHooks()` and `removeHooks()`. The result type is `{ok: true, changed: boolean} | {ok: false, reason: 'malformed' | 'unexpected' | 'unreadable' | 'unwritable' | 'changedOnDisk'}`.
 - `hookNotice.ts`: claims and releases the cross-window failure marker.
 - `uninstall.ts`: the `vscode:uninstall` entry, which calls `removeHooks()`.
 - `sessionState.ts`, pure:
   - `parseStatus(text, mtimeMs)` returns `{sessionId, event, cwd, eventAt} | null`.
-  - `isUnread(status, seenAt)` and `ownsSession(cwd, folders)` (prefix match on path segments).
-  - `unreadCount(...)` and `tabTitle(count, name)`.
+  - `isUnread(status, seenAt)`.
+  - `containingFolderLength(cwd, folders)`: the length of the longest folder that equals or contains `cwd` on path segments, or `-1`.
+  - `ownerOf(cwd, windows: WindowFolders[])`: the pid of the window with the longest containing folder, ties to the lowest pid, or `null`. `WindowFolders` is `{pid: number, folders: string[]}`.
+  - `unreadCount(statuses, seen, live, owns)` and `tabTitle(count, name)`.
 - `sessionStore.ts`, IO:
   - `readStatuses()`, `readSeen()`, `writeSeen(id, ms)`.
-  - `readLiveSessionIds()`, which reads `~/.claude/sessions/*.json` (`sessionId`, `pid`) and checks liveness with `process.kill(pid, 0)`. `EPERM` counts as alive. It returns `null` when the directory is unreadable.
+  - `isAlive(pid)`: `process.kill(pid, 0)` succeeds or throws `EPERM`; pids that are not positive integers are dead.
+  - `readLiveSessionIds()`, which reads `~/.claude/sessions/*.json` (`sessionId`, `pid`) and checks each pid with `isAlive`. It returns `null` when the directory is unreadable.
   - `pruneStale()`, which deletes status and seen files older than 7 days for sessions that are not live, and only runs when the live set is known.
-- `windowTracker.ts`: a class that is given `folders()`, `focused()` and `onCount(count)`. It watches `status/` and `seen/` with `fs.watch`, polls every 5 s as a fallback and for liveness, and debounces by 150 ms (as `focusReporter.ts:27` does). On each pass it:
-  1. Reads the live statuses that belong to this window.
+- `windowRegistry.ts`, IO:
+  - `publishWindow(pid, folders)` and `unpublishWindow(pid)` write and delete `<data>/windows/<pid>.json`.
+  - `readWindows()` returns the published windows whose pid `isAlive`, and deletes the files of dead ones.
+  - `knownWindows(selfPid, selfFolders)` is `readWindows()` minus any entry for `selfPid`, plus `{pid: selfPid, folders: selfFolders}` from memory, so a window never depends on reading its own file back.
+- `windowTracker.ts`: a class that is given `pid`, `folders()`, `focused()` and `onCount(count)`. It watches `status/`, `seen/` and `windows/` with `fs.watch`, polls every 5 s as a fallback and for liveness, and debounces by 150 ms (as `focusReporter.ts:27` does). On each pass it:
+  1. Reads the live statuses and the known windows, and keeps the statuses whose `ownerOf(cwd, windows) === pid`.
   2. If the window is focused, writes `seenAt = Date.now()` for each one whose `eventAt > seenAt`.
   3. Calls `onCount` when the count changed.
 
@@ -103,7 +113,7 @@ Logic lives in pure modules with colocated `*.test.ts`, following `revealSession
   - `buildWorkspace(existing, folder, folderSettings, title)`, which is pure.
   - `writeWorkspace(...)`, `setWorkspaceTitle(path, title)` and `syncFolderSettings(path, folder)`, which do read-modify-write with an atomic write.
 - `reopenOffer.ts`: the once-per-folder offer, keyed in `globalState`, and the reopen action, `vscode.openFolder` with `{forceReuseWindow: true}`.
-- `jumpRequests.ts`: `parseJumpRequest`, `shouldHandle(request, folders, now)` (owner by folder, ignoring requests older than 10 s) and a responder class that watches `jump/`.
+- `jumpRequests.ts`: `parseJumpRequest`, `shouldHandle(request, selfPid, windows, now)` (`ownerOf(request.cwd, windows) === selfPid`, ignoring requests older than 10 s) and a responder class that watches `jump/`.
 
 Generated workspace file:
 
@@ -134,9 +144,9 @@ App side (`src-tauri/src/jump/mod.rs`, rewritten):
 
 Extension side:
 
-1. A window whose folders own `cwd` claims the request by unlinking it. An `ENOENT` means another window took it.
-2. It runs `revealSession` (`extension/src/revealSession.ts:62`) when `tabLabel` is non-null, and records `notPresent` otherwise.
-3. It writes the reply, with `open` = the workspace file path when the window has one, otherwise the owning folder.
+1. Only the window that owns the session by the ownership rule (`ownerOf(cwd, knownWindows(...)) === process.pid`) claims the request, by unlinking it. A parent window never claims a session that a more specific window (for example a worktree under `.claude/worktrees/`) owns, so the tab-label check in `revealSession` (`extension/src/revealSession.ts:122`, labels are truncated titles and not unique) is never the only guard against opening a second live copy of a session (`revealSession.ts:9-16`). An `ENOENT` on unlink means another window took it, which only happens when two windows briefly disagree about the window list.
+2. It runs `revealSession` (`extension/src/revealSession.ts:115`) when `tabLabel` is non-null, and records `notPresent` otherwise.
+3. It writes the reply, with `open` = the workspace file path when the window has one, otherwise the window's longest folder containing `cwd`.
 
 `code <workspace file>` focuses the window already holding that workspace. For plain-folder windows, `code <folder>` behaves as today.
 
@@ -147,18 +157,21 @@ Extension side:
   - It refreshes the live session id set every 5 s from `session_files::read_all(user_sessions_dir())` plus `LiveProcesses`.
   - It applies a status record only when the session is live and its `(mtime)` differs from the last applied one. A session whose file it applied before and that has now vanished gets `SessionEnd`.
   - It applies seen times.
+  - Records carry their recorded time. `apply_status(record, now_ms)` places the event at `clock.now() - (now_ms - written_at_ms)` on the registry's monotonic clock, so a `Stop` from yesterday does not sort as brand new and a `UserPromptSubmit` counts working time from when it happened, not from app launch.
+  - Startup is silent. `SoundNotifier` starts unarmed and earns nothing until `arm()`; the first observation after `arm()` is a baseline that earns nothing either. The feed calls `arm()` once its first pass has been applied, so state loaded at startup (including scan-discovered `Unknown` sessions becoming `Done`) never plays a sound, and only changes seen after the initial load do.
   - `HookPayload` and `into_event` move from `listener/routes.rs` to `session/hook_payload.rs` so both use them.
 - **Unread**: `Session` gains `attention_at_ms` and `seen_at_ms` (wall-clock epoch ms) and `unread() = attention > seen`.
-  - `SessionRegistry` gains `apply_status(StatusRecord)`, `apply_seen(id, ms)` and `mark_read(id, now_ms)`.
-  - The focus-driven unread code goes: the `is_watched` gate at `registry.rs:217`, `read_window`, and the clear in `apply_focus_report`.
+  - `SessionRegistry` gains `apply_status(StatusRecord, now_ms)`, `apply_seen(id, ms)` and `mark_read(id, now_ms)`.
+  - The focus-driven unread code goes: the `is_watched` gate at `registry.rs:217`, `read_window`, and the clear in `apply_focus_report`. The feed's first pass replays every live status file, so `apply_status` must not stamp records with the registry's `now`.
   - `mark_read` also writes the seen file.
   - Sounds skip sessions that are not unread, in place of `is_current` (`notify/sound.rs:238`). The feed reads `seen/` after `status/` in the same pass, which keeps a session that finished in a focused window quiet whenever the extension has already written its seen time.
 - **Tracking status**: a new `tracking.rs` exposes the IPC command `tracking_status`, which returns `{state: 'installed' | 'notInstalled' | 'hooksMissing'}`.
   - `notInstalled` means the script is missing.
   - `hooksMissing` means the script is present but some event lacks a marker entry.
   - It reads the settings file through `hooks::settings_file::SettingsFile::user()`.
-  - The popover polls it every 2 s while it is not `installed`, and on open.
-- **`lock_recovering`** moves from `listener/server.rs:118` to a new `src-tauri/src/sync.rs`. The server re-exports it until the listener is deleted. Each later task that touches an importer switches it to `crate::sync`.
+  - The popover polls it every 2 s while it is not `installed`, and re-reads it each time the popover opens (the popover window gaining focus), so an uninstalled extension shows the install screen on the next open instead of a frozen list.
+- **`lock_recovering`** moves from `listener/server.rs:118` to a new `src-tauri/src/sync.rs`. The server re-exports it until the listener is deleted. Each later task that touches an importer switches it to `crate::sync` (02_03 for `notify/sound.rs` and `ipc/commands.rs`, 02_05 for `jump/mod.rs`, 03_03 for `ipc/snapshot_channel.rs`, 03_05 for `discovery/reconciler.rs`). Importers inside modules that are deleted (`extension/`, `hooks/install.rs`) keep the re-export until they go.
+- **Test fixtures outside the deleting task's files** are cleaned in the earlier task that owns the file: 02_03 deletes the focus harness and focus tests in `notify/sound.rs`; 02_05 removes the window placement (`Registration`, `ExtensionPid`, `FixedParents`, `window_map::associate`, `apply_window_map`) from the `ipc/commands.rs` `jumpable_session` fixture; 03_03 removes the installer test helpers from `ipc/commands.rs`; `ListenerHealth` is deleted in 03_04 with `hooks/install.rs`, whose tests use it; `SessionSnapshot.is_current` is deleted in 03_07, which also updates the fixtures in `tray/icon.rs` and `ipc/snapshot_channel.rs`.
 
 ### What gets removed, and when
 
@@ -169,10 +182,10 @@ Extension side:
 - **Stage 3**, in order:
   1. Listener-era UI (03_01, 03_02).
   2. Snapshot health, the hook and extension IPC commands, and the icon's not-receiving state (03_03).
-  3. The installer, the stash and the port file, with the legacy cleanup added (03_04).
-  4. The listener, the `extension/` module, and the `axum`/`ureq` dependencies (03_05).
-  5. Window association and process tree (03_06).
-  6. `tab_match` and the event types are trimmed (03_07).
+  3. The installer, the stash and the port file, and `ListenerHealth`, with the legacy cleanup added (03_04).
+  4. The listener, the `extension/` module, the reconciler's window association, and the `axum`/`ureq` dependencies (03_05).
+  5. The registry's window and focus state, `window_map.rs` and `process_tree.rs` (03_06).
+  6. `tab_match`, the event types and `SessionSnapshot.is_current` are trimmed (03_07).
   7. The extension's `AydyClient` and `FocusReporter` (03_08).
 
 Task files list deletions under "Files to delete". Those do not count toward the 5-file limit.
@@ -181,8 +194,9 @@ Task files list deletions under "Files to delete". Those do not count toward the
 
 - The extension writes `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), the user's own config. It adds and refreshes the five AYDY command-hook entries, raced by every open window. The edit is check-first, atomic, aborts on change and retries once (01_02, 01_03).
 - Uninstalling the extension runs `vscode:uninstall`, which deletes AYDY's command-hook entries from the user's settings file (01_03).
-- On every start, the stage 3 app deletes the legacy `X-Aydy-Hook` HTTP/curl entries from the user's settings file. It does not restore the stashed `afplay` entries (03_04).
-- Deletes in `<data>`: the extension prunes status and seen files older than 7 days for dead sessions (01_04), and jump requests and replies are deleted after use (02_05, 02_06). The hook script deletes a status file on `SessionEnd`.
+- On every start, the stage 3 app deletes the legacy `X-Aydy-Hook` HTTP/curl entries from the user's settings file. It does not restore the stashed `afplay` entries, and it deletes the stash file `removed-hooks.json` from the app config dir, so those entries cannot be restored later (owner decision 4, 03_04).
+- The extension's atomic writer rewrites `~/.claude/settings.json` through a symlink's real path and keeps the file's permissions (01_02).
+- Deletes in `<data>`: the extension prunes status and seen files older than 7 days for dead sessions (01_04), window files are deleted on dispose and when their pid is dead (01_04, 01_05), and jump requests and replies are deleted after use (02_05, 02_06). The hook script deletes a status file on `SessionEnd`.
 - Reopening a window from a generated `.code-workspace` restarts its extension host and may end Claude Code sessions running in it. It happens only on the owner's click (01_07).
 - Removed public surface:
   - The app's loopback HTTP listener and its routes.
@@ -199,14 +213,14 @@ Task files list deletions under "Files to delete". Those do not count toward the
 | 01_01_hook-script.md | Hook script and shared path module | extension/hook/aydy-hook.sh, extension/src/aydyPaths.ts |
 | 01_02_hook-settings.md | Settings JSON transforms, atomic write, script copy and hook install IO | extension/src/hookSettings.ts, extension/src/atomicWrite.ts, extension/src/hookInstall.ts |
 | 01_03_install-on-activation.md | Install hooks on activation, one-window failure notice, uninstall cleanup | extension/src/extension.ts, extension/src/hookNotice.ts, extension/src/uninstall.ts, extension/package.json |
-| 01_04_session-state.md | Parse status and seen files, liveness, unread count, title text, pruning | extension/src/sessionState.ts, extension/src/sessionStore.ts |
-| 01_05_window-tracker.md | Per-window watcher that marks seen on focus and computes the count | extension/src/windowTracker.ts, extension/src/extension.ts |
+| 01_04_session-state.md | Parse status and seen files, liveness, window ownership rule and published window list, unread count, title text, pruning | extension/src/sessionState.ts, extension/src/sessionStore.ts, extension/src/windowRegistry.ts |
+| 01_05_window-tracker.md | Publish this window's folders; per-window watcher that marks seen on focus and computes the count for the sessions it owns | extension/src/windowTracker.ts, extension/src/extension.ts |
 | 01_06_workspace-file.md | JSONC parse and generated workspace file build, sync and title write | extension/src/jsonc.ts, extension/src/workspaceFile.ts |
 | 01_07_title-and-reopen.md | Write the title, sync folder settings, reopen offer and command | extension/src/reopenOffer.ts, extension/src/extension.ts, extension/package.json, extension/README.md |
 | 02_01_sync-module.md | Move `lock_recovering` to `sync.rs` | src-tauri/src/sync.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs, src-tauri/src/discovery/resume.rs, src-tauri/src/tray/popover.rs |
 | 02_02_status-files-reader.md | Shared hook payload parsing and status/seen file reader | src-tauri/src/session/hook_payload.rs, src-tauri/src/session/mod.rs, src-tauri/src/listener/routes.rs, src-tauri/src/discovery/status_files.rs, src-tauri/src/discovery/mod.rs |
-| 02_03_registry-seen-unread.md | Unread from attention vs seen times, `mark_read` writes the seen file, sounds skip read sessions | src-tauri/src/session/registry.rs, src-tauri/src/session/session.rs, src-tauri/src/notify/sound.rs, src-tauri/src/ipc/commands.rs, src-tauri/src/lib.rs |
-| 02_04_file-feed.md | Loop feeding the registry from files, listener stops feeding hooks | src-tauri/src/discovery/file_feed.rs, src-tauri/src/discovery/mod.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs, src-tauri/src/listener/routes.rs |
+| 02_03_registry-seen-unread.md | Unread from attention vs seen times, status records at their recorded time, `mark_read` writes the seen file, sounds skip read sessions and stay silent until armed | src-tauri/src/session/registry.rs, src-tauri/src/session/session.rs, src-tauri/src/notify/sound.rs, src-tauri/src/ipc/commands.rs, src-tauri/src/lib.rs |
+| 02_04_file-feed.md | Loop feeding the registry from files, arms sounds after the initial load, listener stops feeding hooks | src-tauri/src/discovery/file_feed.rs, src-tauri/src/discovery/mod.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs, src-tauri/src/listener/routes.rs |
 | 02_05_jump-request-app.md | Jump by request and reply files | src-tauri/src/jump/mod.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs, src-tauri/src/listener/routes.rs, src-tauri/src/ipc/commands.rs |
 | 02_06_jump-responder-extension.md | Extension claims and answers jump requests | extension/src/jumpRequests.ts, extension/src/extension.ts |
 | 02_07_jump-outcome-ui.md | Popover handles `unanswered` with the new copy | src/types/JumpOutcome.ts, src/composables/useJump.ts, src/components/molecules/JumpFailureNotice.vue, docs/design/menubar-ux.md |
@@ -214,9 +228,9 @@ Task files list deletions under "Files to delete". Those do not count toward the
 | 02_09_install-extension-screen.md | Install-the-extension screen and popover gate | src/types/TrackingStatus.ts, src/composables/useTracking.ts, src/components/organisms/InstallExtension.vue, src/App.vue, docs/design/menubar-ux.md |
 | 03_01_remove-listener-ui.md | Remove hook, extension-prompt, stale and port-move UI; add the Session tracking row | src/App.vue, src/components/organisms/SettingsPane.vue, src/components/molecules/PopoverHeader.vue, src/composables/useSessions.ts, src/types/SessionList.ts |
 | 03_02_drop-you-are-here-ui.md | Remove `isCurrent` and update the UX doc | src/types/Session.ts, src/components/molecules/SessionRow.vue, docs/design/menubar-ux.md |
-| 03_03_drop-health-and-hook-ipc.md | Snapshot drops health, port move, stale and extension fields; hook and extension commands go; no not-receiving icon | src-tauri/src/ipc/snapshot_channel.rs, src-tauri/src/ipc/commands.rs, src-tauri/src/tray/icon.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs |
-| 03_04_remove-installer.md | Delete the installer, stash and port file; add the legacy hook cleanup | src-tauri/src/hooks/merge.rs, src-tauri/src/hooks/mod.rs, src-tauri/src/hooks/legacy.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs |
+| 03_03_drop-health-and-hook-ipc.md | Snapshot drops health, port move, stale and extension fields; hook and extension commands go; no not-receiving icon | src-tauri/src/ipc/snapshot_channel.rs, src-tauri/src/ipc/commands.rs, src-tauri/src/tray/icon.rs, src-tauri/src/lib.rs |
+| 03_04_remove-installer.md | Delete the installer, stash, port file and `ListenerHealth`; add the legacy hook cleanup that also deletes the stash file | src-tauri/src/hooks/merge.rs, src-tauri/src/hooks/mod.rs, src-tauri/src/hooks/legacy.rs, src-tauri/src/lib.rs, src-tauri/src/listener/server.rs |
 | 03_05_remove-listener-and-extension-module.md | Delete the listener and the extension registry/channel | src-tauri/src/lib.rs, src-tauri/src/discovery/reconciler.rs, src-tauri/src/discovery/window_map.rs, src-tauri/src/session/event.rs, src-tauri/Cargo.toml |
 | 03_06_remove-window-association.md | Registry and reconciler drop windows; delete window_map and process_tree | src-tauri/src/session/registry.rs, src-tauri/src/session/session.rs, src-tauri/src/discovery/reconciler.rs, src-tauri/src/discovery/mod.rs |
-| 03_07_trim-tab-match-and-events.md | Keep only tab label helpers; drop `WindowId`/`FocusReport` | src-tauri/src/session/tab_match.rs, src-tauri/src/session/event.rs |
+| 03_07_trim-tab-match-and-events.md | Keep only tab label helpers; drop `WindowId`/`FocusReport` and `SessionSnapshot.is_current` | src-tauri/src/session/tab_match.rs, src-tauri/src/session/event.rs, src-tauri/src/session/registry.rs, src-tauri/src/tray/icon.rs, src-tauri/src/ipc/snapshot_channel.rs |
 | 03_08_extension-drop-loopback.md | Extension drops `AydyClient` and `FocusReporter` | extension/src/extension.ts, extension/src/revealSession.ts, extension/package.json, extension/README.md |

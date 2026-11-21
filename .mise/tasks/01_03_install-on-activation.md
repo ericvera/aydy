@@ -18,7 +18,7 @@ On every activation the extension refreshes the hook script and makes sure the h
   - `ensureHooks()`, which returns `{ok:true, changed} | {ok:false, reason}`.
   - `removeHooks()`.
 - Task 01_01 produced `extension/src/aydyPaths.ts` (`noticesDir()` and `claudeSettingsPath()`).
-- Activation entry: `extension/src/extension.ts:128` (`activate`). The existing `AydyClient` and `FocusReporter` wiring stays untouched until task 03_08, because the app still uses the loopback channel in this stage.
+- Activation entry: `extension/src/extension.ts:120` (`activate`). The existing `AydyClient` and `FocusReporter` wiring stays untouched until task 03_08, because the app still uses the loopback channel in this stage.
 - `extension/package.json` has `"activationEvents": ["onStartupFinished"]` and `"contributes": {}`. The VSIX is built by `yarn package-extension` (`package.json` scripts) from `out/`, compiled by `tsc -p extension/tsconfig.build.json`. Runtime npm dependencies are not shipped.
 - Mock (`.mise/mock/vscode-reopen-offer.html`, state D):
   - Installation is silent when it works.

@@ -20,7 +20,7 @@ Add the code that copies the hook script to its fixed path and keeps AYDY's comm
 - The pattern to mirror is the Rust settings writer:
   - Round-trip the whole JSON.
   - Abort if the file changed on disk (`src-tauri/src/hooks/settings_file.rs:186-205`).
-  - Write atomically (`src-tauri/src/atomic_file.rs:20-29`).
+  - Write atomically (`src-tauri/src/atomic_file.rs:20-29`). It carries the target's existing permissions over to the temp file before the rename (`atomic_file.rs:57-59`), so rewriting a private file does not widen it.
   - Keep the file's indentation and trailing newline (`settings_file.rs:42` `JsonStyle::detect`).
 
 ## Guides
@@ -41,8 +41,13 @@ None match.
 
 `atomicWrite.ts`:
 
-- `writeAtomically(path, text, mode?)` writes to `<dir>/.<base>.<pid>.<random>.tmp`, fsyncs, renames, and cleans up the temp file on failure.
-- `writeIfUnchanged(path, expected: string | null, text)` re-reads the file just before the rename and throws `ChangedOnDisk` if its content differs from `expected`. `null` means the file did not exist.
+- `resolveTarget(path)`: `lstat` the path. When it is a symlink, return `fs.realpath(path)`; when the link dangles (`ENOENT` from realpath), return `path.resolve(dirname(path), readlink(path))`. Otherwise (including a missing path) return `path` unchanged.
+- `writeAtomically(path, text, mode?)`:
+  1. Resolves the real target with `resolveTarget`, so a symlinked settings file (dotfiles managers) keeps its link and the real file is updated.
+  2. Writes to `<real dir>/.<real base>.<pid>.<random>.tmp` and fsyncs.
+  3. Sets the temp file's mode: `mode` when given; otherwise, when the real target exists, its current permission bits (`stat.mode & 0o7777`), mirroring `src-tauri/src/atomic_file.rs:57-59`; otherwise leaves the umask default.
+  4. Renames onto the real target, and cleans up the temp file on any failure.
+- `writeIfUnchanged(path, expected: string | null, text)` follows the same steps (resolved target, permissions carried over) and re-reads the real target just before the rename, throwing `ChangedOnDisk` if its content differs from `expected`. `null` means the file did not exist.
 
 `hookInstall.ts`:
 
@@ -60,20 +65,28 @@ None match.
 - Every open window calls `ensureHooks` on activation at the same moment. The no-write path when hooks are present is what prevents a race. Never write when nothing changed.
 - Do not reorder or reformat keys you did not touch. `JSON.stringify(value, null, indent)` keeps insertion order for string keys.
 - The settings file is the user's. Never write over a file that failed to parse.
+- `~/.claude/settings.json` is often mode 0600 because it can hold `env` secrets. `ensureHooks` and `removeHooks` pass no mode, so the carry-over in `writeAtomically` is what keeps it private. Do not pass a default mode from those callers.
+- Renaming onto a symlink path would replace the link with a regular file. Always rename onto the resolved real path.
 
 ## Verification
 
-- New `extension/src/hookSettings.test.ts`. Use a fixture that copies the real settings shape from `src-tauri/src/hooks/mod.rs:579-629` (with `afplay` hooks plus an `X-Aydy-Hook` http hook) and check:
+- New `extension/src/hookSettings.test.ts`. Use a fixture that copies the real settings shape from `REAL_SETTINGS` at `src-tauri/src/hooks/mod.rs:94` (with `afplay` hooks plus an `X-Aydy-Hook` http hook) and check:
   - add to an empty doc
   - add alongside the user's hooks with them untouched
   - a no-op when present
   - replacing a stale AYDY command
   - removal leaving the user's hooks intact and pruning empty groups and events
   - wrong-shape input throws
-- New `extension/src/atomicWrite.test.ts` checks the write, mode bits, a `ChangedOnDisk` abort that leaves the file intact, and no leftover temp files.
+- New `extension/src/atomicWrite.test.ts` checks:
+  - the write, and an explicit `mode` applied
+  - an existing 0600 target stays 0600 after `writeAtomically` and after `writeIfUnchanged` with no mode (set `process.umask(0o022)` for the test and restore it)
+  - a symlinked target: after the write, the link is still a symlink (`lstat().isSymbolicLink()`), it points at the same real file, and the real file holds the new text with its permissions kept
+  - a `ChangedOnDisk` abort that leaves the file intact
+  - no leftover temp files
 - New `extension/src/hookInstall.test.ts` runs against a temp HOME and checks:
   - script copied with mode 755, and rewritten only when the source differs
   - `ensureHooks` writes once, then reports `changed:false` with the file mtime untouched
   - malformed JSON is reported and the file is unchanged
   - two concurrent `ensureHooks` calls end with exactly one entry per event
+  - a 0600 settings file is still 0600 after `ensureHooks` and `removeHooks` rewrite it
 - Run `yarn test`, `yarn build-tsc` and `yarn lint`.
