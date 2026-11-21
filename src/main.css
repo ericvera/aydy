@@ -1,0 +1,39 @@
+/*
+  Base styles for the popover window.
+
+  These live in @layer main deliberately. UnoCSS emits its reset and its
+  utilities unlayered, and unlayered CSS beats every layer, so anything here
+  loses to both. That is what we want — a utility must always be able to
+  override a base style — but it also means a declaration here that collides
+  with the UnoCSS reset silently does nothing. Only declare what the reset
+  does not already cover, and never derive a spacing decision from this file.
+*/
+
+@layer main;
+
+@layer main {
+  body {
+    /* macOS system stack so the popover matches native menu bar UI */
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+
+    /*
+      The window itself is transparent so its rounded corners are real corners
+      and macOS draws the shadow around them. The popover shell paints the
+      background; painting it here would fill those corners back in.
+    */
+    background-color: transparent;
+    color: #ececef;
+
+    /* The popover is not a document; it must never scroll the whole window */
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  a {
+    cursor: pointer;
+  }
+}

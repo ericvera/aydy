@@ -1,0 +1,71 @@
+{
+  "name": "aydy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "macOS menu bar app showing every active Claude Code session at a glance",
+  "type": "module",
+  "packageManager": "yarn@4.17.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "yarn build-tsc && vite build",
+    "build-extension": "tsc -p extension/tsconfig.build.json",
+    "build-tsc": "vue-tsc --noEmit && tsc -p extension --noEmit",
+    "dev": "vite",
+    "initialize": "husky",
+    "lint": "eslint . && stylelint \"**/*.vue\" \"src/**/*.css\"",
+    "package-extension": "yarn build-extension && cd extension && vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "vue": "^3.5.40"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tauri-apps/cli": "^2.11.4",
+    "@tsconfig/strictest": "^2.0.8",
+    "@types/node": "^26.1.2",
+    "@types/vscode": "1.90.0",
+    "@unocss/eslint-config": "^66.7.0",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vscode/vsce": "^3.9.2",
+    "@vue/compiler-dom": "^3.5.40",
+    "@vue/test-utils": "^2.4.11",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.10.0",
+    "happy-dom": "^20.11.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "postcss-html": "^1.8.1",
+    "prettier": "^3.9.6",
+    "stylelint": "^17.14.1",
+    "stylelint-config-recommended-vue": "^1.6.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.65.0",
+    "unocss": "^66.7.0",
+    "unocss-preset-strict-design": "^3.0.0",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10",
+    "vue-eslint-parser": "^10.4.1",
+    "vue-tsc": "^3.3.9"
+  },
+  "resolutions": {
+    "stylelint-config-html": "1.1.0"
+  },
+  "prettier": {
+    "tabWidth": 2,
+    "semi": false,
+    "singleQuote": true
+  },
+  "lint-staged": {
+    "*.{vue,css}": "stylelint",
+    "*.{ts,tsx,cjs,mjs,js,vue}": "eslint --cache",
+    "*.rs": "rustfmt --edition 2021",
+    "*": "prettier --ignore-unknown --write"
+  }
+}

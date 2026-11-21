@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  "extends": "./tsconfig.json",
+
+  /* The tests are type-checked with the rest of the source but never emitted:
+     `out/` is copied verbatim into the installed extension, and a test file
+     there is dead weight that imports a test runner the extension does not
+     depend on. */
+  "exclude": ["src/**/*.test.ts"]
+}

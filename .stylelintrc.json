@@ -1,0 +1,15 @@
+{
+  "extends": ["stylelint-config-recommended-vue"],
+
+  "rules": {
+    "color-named": "never",
+    "declaration-no-important": true,
+    "declaration-property-unit-allowed-list": {
+      "/^border(?!-radius)/": ["px"],
+      "/^border-radius/": ["rem", "%"],
+      "/^padding|^gap/": ["rem"]
+    },
+    "selector-max-id": 0,
+    "unit-allowed-list": ["%", "px", "rem", "fr", "s"]
+  }
+}

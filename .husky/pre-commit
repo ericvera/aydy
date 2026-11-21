@@ -1,0 +1,7 @@
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+# rustup installs cargo/rustfmt here; git hooks do not load the login shell.
+export PATH="$HOME/.cargo/bin:$PATH"
+
+yarn lint-staged

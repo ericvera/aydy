@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the popover webview is allowed to do.",
+  "windows": ["popover"],
+  "permissions": ["core:default", "positioner:default"]
+}

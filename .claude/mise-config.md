@@ -2,6 +2,7 @@
 
 Mise directory: .mise/
 Branch convention: feat/<slug> for features, fix/<slug> for bug fixes
+Checklist: .claude/mise-checklist.md
 Ship: merge (squash)
 
 ## Quality commands

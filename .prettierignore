@@ -1,0 +1,11 @@
+# Vendored Yarn release binary — committed on purpose, never reformat
+.yarn/
+
+# Lockfile — owned by Yarn's own writer
+yarn.lock
+
+# Build output
+dist/
+extension/out/
+src-tauri/target/
+src-tauri/gen/

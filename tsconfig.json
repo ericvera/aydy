@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  "extends": ["@tsconfig/strictest/tsconfig.json"],
+
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+
+    /* Modules */
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "paths": {
+      "@/test": ["./src/__test__/index.ts"],
+      "@/test/*": ["./src/__test__/*"]
+    },
+    "types": ["vite/client", "node"],
+
+    /* Emit — Vite compiles, TypeScript only type-checks */
+    "noEmit": true,
+
+    /* Interop Constraints */
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": false,
+    "checkJs": false,
+
+    "skipLibCheck": true
+  },
+
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "*.test.ts",
+    "uno.config.ts",
+    "vite.config.ts"
+  ]
+}

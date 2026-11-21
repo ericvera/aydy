@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Yarn — the release binary is committed on purpose; everything else is not
+.yarn/*
+!.yarn/releases
+.pnp.*
+
+# Tool caches
+.eslintcache
+
+# Build output
+dist/
+extension/out/
+extension/*.vsix
+src-tauri/target/
+src-tauri/gen/
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Logs
+*.log

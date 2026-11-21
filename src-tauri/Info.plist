@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Menu bar only: no Dock icon, no app switcher entry, for the bundled .app.
+         Under `tauri dev` there is no bundle, so `set_activation_policy` in
+         src/lib.rs covers that case instead. -->
+    <key>LSUIElement</key>
+    <true/>
+  </dict>
+</plist>

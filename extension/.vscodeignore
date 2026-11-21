@@ -1,0 +1,9 @@
+# The VSIX ships what the extension host loads and what a reader needs to judge
+# it: the manifest, the compiled `out/`, and the README. Everything else here is
+# how that gets built.
+src/**
+tsconfig.json
+tsconfig.build.json
+
+# The artifact itself, when a previous package run left one behind.
+*.vsix
