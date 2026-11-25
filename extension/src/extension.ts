@@ -114,10 +114,17 @@ const writeTitle = (): void => {
   )
 }
 
+let labelRefreshes = 0
+
 const refreshLabel = async (folder: string): Promise<string | null> => {
+  labelRefreshes += 1
+  const refresh = labelRefreshes
   const next = await folderLabel(folder)
-  label = next.label
-  writeTitle()
+  // A HEAD rename fires several events whose lookups can settle out of order.
+  if (refresh === labelRefreshes) {
+    label = next.label
+    writeTitle()
+  }
   return next.headPath
 }
 
