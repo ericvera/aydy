@@ -15,8 +15,27 @@ Not a bug fix. Extension-only change; Rust never reads window titles or glyphs.
 - Docs describing the format: extension/README.md:84-86, docs/design/menubar-ux.md:236.
 - The "VS Code tabs" are actually window titles. No schema, data-deletion or public API change; `aydy.showSessionCountInTabTitle` command name stays.
 
-## Open questions
+## Decisions
 
-1. Which glyph shows "working"?
-2. Does a session waiting on a Notification count as working?
-3. Worktree title format?
+- Three glyphs in the window title: `○` quiet, `◐` working (a prompt is running, `UserPromptSubmit`), `●` done or needs attention (unread, including a session waiting on a Notification). Precedence: `●` beats `◐` beats `○`.
+- Title format by folder kind:
+  - Linked worktree: `<glyph> <repo> · <worktree>`, e.g. `● aydy · feat-tab-state`.
+  - Main checkout on a branch other than main: `<glyph> <repo> • <branch>`, e.g. `◐ aydy • feat/tab-state`.
+  - Main checkout on main: `<glyph> <repo>`.
+
+## Assumptions
+
+- `◐` shows no count; the unread count on `●` (`● N`, `● 9+`) stays as today.
+- The two separators are deliberately different: `·` (middle dot) for worktrees, `•` (bullet) for branches.
+- "On main" means the checked-out branch is `main` or `master`; detached HEAD shows `<glyph> <repo>`.
+- A folder that is not in a git repo keeps today's title: `<glyph> <basename>`.
+- The repo name is the main repository's folder name, resolved like Rust's `identify` (src-tauri/src/discovery/repo.rs), ported to TS in the extension.
+- The title refreshes when the branch changes (HEAD watched), not only at window open.
+- No mock: the change is a window-title string in the VS Code extension, not the Vue app's UI.
+- extension/README.md and docs/design/menubar-ux.md format descriptions are updated to match.
+
+## Proposal
+
+- Issue: window titles show only unread/quiet and the folder basename, so working sessions and which repo/branch a window belongs to aren't visible at a glance.
+- Approach: add `◐` working state alongside `○`/`●` (● > ◐ > ○), and title windows `repo · worktree`, `repo • branch`, or `repo` on main, via a TS port of Rust's repo identification, refreshed on HEAD change.
+- Skips: spec and critic (extension-only, fits one implementer, nothing hard to undo).
