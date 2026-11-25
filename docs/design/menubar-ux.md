@@ -233,9 +233,11 @@ is no dismiss control. Two things write a seen time, and nothing else:
 - **A click on the row in the popover**, jumpable or not. For a session no
   window owns, this is the only way it clears.
 
-The VS Code tab count — `● N folder` in each window's title — counts that
-window's unread sessions by the same rule, read from the same files, so the
-window and the popover cannot disagree about what is new.
+The VS Code tab count — `● N repo · branch` in each window's title — counts
+that window's unread sessions by the same rule, read from the same files, so the
+window and the popover cannot disagree about what is new. With nothing unread,
+the title shows `◐` while one of the window's prompts is running, matching the
+menubar's working ring, and `○` otherwise.
 
 ### What a jump does, and what it says when it cannot
 

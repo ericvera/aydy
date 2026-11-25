@@ -81,10 +81,16 @@ copy of a session the user does not know about is worse than one they are told a
 
 ## The session count in the tab title
 
-A window can show how many of its Claude Code sessions need you in its own title: `○
-okven` when none do, `● okven` for one, `● 3 okven` for several and `● 9+ okven` past
-nine. The count is this window's sessions that finished or asked for something since you
-last had the window focused.
+A window can show how many of its Claude Code sessions need you in its own title: `●
+okven` for one, `● 3 okven` for several and `● 9+ okven` past nine. The count is this
+window's sessions that finished or asked for something since you last had the window
+focused. When none need you, the title shows `◐ okven` while a prompt is running in one
+of them and `○ okven` otherwise.
+
+The name after the glyph is the repository, with the worktree or branch after a `·`:
+`okven · eric-attribution-2` in a linked worktree, `okven · feat/x` in the main checkout
+on a branch, and just `okven` on `main` or `master` or a detached HEAD. A folder outside
+git shows its own name. The title follows branch switches in the main checkout.
 
 VS Code only lets an extension set a window's title through a settings file, and a
 plain-folder window's only settings file is the repository's own `.vscode/settings.json`.

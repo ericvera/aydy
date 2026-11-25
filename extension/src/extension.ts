@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename } from 'node:path'
+import { basename, dirname } from 'node:path'
 
 import * as vscode from 'vscode'
 
@@ -20,7 +20,9 @@ import {
 } from './autoReopen'
 import type { RevealEnvironment } from './revealSession'
 import { revealSession, versionOf } from './revealSession'
+import { folderLabel } from './repoLabel'
 import { tabTitle } from './sessionState'
+import type { WindowGlance } from './sessionState'
 import {
   hasChildren,
   readLiveSessions,
@@ -83,9 +85,9 @@ const isClaudeTab = (tab: vscode.Tab): boolean =>
 const claudeCodeVersion = (): string | null =>
   versionOf(vscode.extensions.getExtension(CLAUDE_CODE_EXTENSION)?.packageJSON)
 
-let unreadCount = 0
+let glance: WindowGlance = { unread: 0, working: false }
 
-export const currentUnreadCount = (): number => unreadCount
+let label: string | undefined
 
 const log = (error: unknown): void => {
   console.error('AYDY:', error)
@@ -107,8 +109,34 @@ const writeTitle = (): void => {
   enqueueWorkspaceWrite(() =>
     setWorkspaceTitle(
       target.path,
-      tabTitle(unreadCount, basename(target.folder)),
+      tabTitle(glance, label ?? basename(target.folder)),
     ),
+  )
+}
+
+const refreshLabel = async (folder: string): Promise<string | null> => {
+  const next = await folderLabel(folder)
+  label = next.label
+  writeTitle()
+  return next.headPath
+}
+
+const watchHead = (
+  context: vscode.ExtensionContext,
+  folder: string,
+  headPath: string,
+): void => {
+  const refresh = (): void => {
+    refreshLabel(folder).catch(log)
+  }
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(dirname(headPath)), 'HEAD'),
+  )
+  context.subscriptions.push(
+    watcher,
+    watcher.onDidCreate(refresh),
+    watcher.onDidChange(refresh),
+    watcher.onDidDelete(refresh),
   )
 }
 
@@ -128,7 +156,13 @@ const keepGeneratedWorkspace = async (
 ): Promise<void> => {
   generated = { path, folder }
   syncSettings(path)
-  writeTitle()
+  refreshLabel(folder)
+    .then((headPath) => {
+      if (headPath !== null) {
+        watchHead(context, folder, headPath)
+      }
+    })
+    .catch(log)
   const watcher = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(
       vscode.Uri.file(folder),
@@ -195,10 +229,11 @@ const openFolder = (
   )
 
 const openWorkspace = async (folder: string): Promise<void> => {
-  await reopenAsWorkspace(folder, tabTitle(unreadCount, basename(folder)), {
-    openFolder,
-    confirmOverwrite,
-  })
+  await reopenAsWorkspace(
+    folder,
+    tabTitle(glance, (await folderLabel(folder)).label),
+    { openFolder, confirmOverwrite },
+  )
 }
 
 const terminalPid = (terminal: vscode.Terminal): Promise<number | undefined> =>
@@ -297,7 +332,7 @@ const migrateLegacy = async (folder: string, legacy: string): Promise<void> => {
     await writeWorkspace(
       sibling,
       folder,
-      tabTitle(unreadCount, basename(folder)),
+      tabTitle(glance, (await folderLabel(folder)).label),
     )
   }
   await registerWorkspace(sibling, folder)
@@ -456,8 +491,8 @@ export const activate = (context: vscode.ExtensionContext): void => {
     pid: process.pid,
     folders: () => folders,
     focused: () => vscode.window.state.focused,
-    onCount: (count) => {
-      unreadCount = count
+    onGlance: (next) => {
+      glance = next
       writeTitle()
     },
   })

@@ -118,12 +118,29 @@ export const unreadCount = (
   statuses.filter((status) => isUnread(status, seen.get(status.sessionId)))
     .length
 
-export const tabTitle = (count: number, name: string): string => {
-  if (count <= 0) {
-    return `○ ${name}`
+export const isWorking = (status: SessionStatus): boolean =>
+  status.event === 'UserPromptSubmit'
+
+export interface WindowGlance {
+  unread: number
+  working: boolean
+}
+
+export const windowGlance = (
+  statuses: readonly SessionStatus[],
+  seen: ReadonlyMap<string, number>,
+): WindowGlance => ({
+  unread: unreadCount(statuses, seen),
+  working: statuses.some(isWorking),
+})
+
+export const tabTitle = (glance: WindowGlance, label: string): string => {
+  const { unread } = glance
+  if (unread === 1) {
+    return `● ${label}`
   }
-  if (count === 1) {
-    return `● ${name}`
+  if (unread > 1) {
+    return `● ${unread > 9 ? '9+' : String(unread)} ${label}`
   }
-  return `● ${count > 9 ? '9+' : String(count)} ${name}`
+  return glance.working ? `◐ ${label}` : `○ ${label}`
 }
