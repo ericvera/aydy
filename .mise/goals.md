@@ -1,0 +1,1 @@
+we use the circle (empty and filled) to show agent state in the VS Code tabs. Should we use a third character to show work in progress? also, I think we should do show the repo name on worktrees. Like right now it is hard to tell which code bade the different windows belong to at a glance.
