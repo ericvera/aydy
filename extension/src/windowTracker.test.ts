@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import type { SessionEvent, SessionStatus, WindowFolders } from './sessionState'
+import type {
+  SessionEvent,
+  SessionStatus,
+  WindowFolders,
+  WindowGlance,
+} from './sessionState'
 import type { TrackerDirs, TrackerStore } from './windowTracker'
 import { WindowTracker } from './windowTracker'
 
@@ -94,6 +99,7 @@ const storeFor = (w: FakeWorld): TrackerStore => ({
 interface Started {
   tracker: WindowTracker
   counts: number[]
+  glances: WindowGlance[]
   setFocused: (value: boolean) => void
   dirs: TrackerDirs
 }
@@ -117,12 +123,16 @@ const startTracker = async (
 ): Promise<Started> => {
   let isFocused = focused
   const counts: number[] = []
+  const glances: WindowGlance[] = []
   const dirs = freshDirs()
   const tracker = new WindowTracker({
     pid: SELF,
     folders: () => folders,
     focused: () => isFocused,
-    onCount: (count) => counts.push(count),
+    onGlance: (glance) => {
+      counts.push(glance.unread)
+      glances.push(glance)
+    },
     dirs,
     store,
     debounceMs: DEBOUNCE_MS,
@@ -133,6 +143,7 @@ const startTracker = async (
   return {
     tracker,
     counts,
+    glances,
     dirs,
     setFocused: (value) => {
       isFocused = value
@@ -213,14 +224,17 @@ it('a Stop arriving while focused stays at 0', async () => {
     statuses: [status('s1', 'UserPromptSubmit', '/a')],
     live: liveIn(['s1', null]),
   })
-  const { counts, tracker } = await startTracker(w, { focused: true })
+  const { glances, tracker } = await startTracker(w, { focused: true })
 
   w.statuses = [status('s1', 'Stop', '/a', NOW + 10)]
   vi.setSystemTime(NOW + 20)
   tracker.poke()
   await settle()
 
-  expect(counts).toEqual([0])
+  expect(glances).toEqual([
+    { unread: 0, working: true },
+    { unread: 0, working: false },
+  ])
   expect(w.writes).toEqual(['s1'])
 })
 
@@ -344,7 +358,7 @@ it('a window with no folders owns nothing and writes nothing', async () => {
   expect(w.writes).toEqual([])
 })
 
-it('onCount is not repeated for an unchanged count', async () => {
+it('onGlance is not repeated for an unchanged count', async () => {
   const w = world({
     statuses: [status('s1', 'Stop', '/a')],
     live: liveIn(['s1', null]),
@@ -357,6 +371,19 @@ it('onCount is not repeated for an unchanged count', async () => {
   await settle()
 
   expect(counts).toEqual([1])
+})
+
+it('a running prompt makes the window working, reported once', async () => {
+  const w = world({
+    statuses: [status('s1', 'UserPromptSubmit', '/a')],
+    live: liveIn(['s1', null]),
+  })
+  const { glances, tracker } = await startTracker(w)
+
+  tracker.poke()
+  await settle()
+
+  expect(glances).toEqual([{ unread: 0, working: true }])
 })
 
 it('a focused pass followed by its own watch event does not write again', async () => {

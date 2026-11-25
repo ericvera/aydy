@@ -3,8 +3,8 @@ import type { FSWatcher } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 
 import { claudeSessionsDir, seenDir, statusDir, windowsDir } from './aydyPaths'
-import { isUnread, ownerOf, sessionDir, unreadCount } from './sessionState'
-import type { SessionStatus, WindowFolders } from './sessionState'
+import { isUnread, ownerOf, sessionDir, windowGlance } from './sessionState'
+import type { SessionStatus, WindowFolders, WindowGlance } from './sessionState'
 import {
   pruneStale,
   readLiveSessions,
@@ -42,7 +42,7 @@ export interface WindowTrackerOptions {
   pid: number
   folders: () => string[]
   focused: () => boolean
-  onCount: (count: number) => void
+  onGlance: (glance: WindowGlance) => void
   dirs?: TrackerDirs
   store?: TrackerStore
   debounceMs?: number
@@ -74,7 +74,7 @@ export class WindowTracker {
   private readonly pid: number
   private readonly folders: () => string[]
   private readonly focused: () => boolean
-  private readonly onCount: (count: number) => void
+  private readonly onGlance: (glance: WindowGlance) => void
   private readonly dirs: TrackerDirs
   private readonly store: TrackerStore
   private readonly debounceMs: number
@@ -86,13 +86,13 @@ export class WindowTracker {
   private running = false
   private rerun = false
   private disposed = false
-  private lastCount: number | null = null
+  private lastGlance: WindowGlance | null = null
 
   constructor(options: WindowTrackerOptions) {
     this.pid = options.pid
     this.folders = options.folders
     this.focused = options.focused
-    this.onCount = options.onCount
+    this.onGlance = options.onGlance
     this.dirs = options.dirs ?? defaultDirs()
     this.store = options.store ?? defaultStore(this.dirs)
     this.debounceMs = options.debounceMs ?? TRACKER_DEBOUNCE_MS
@@ -220,10 +220,15 @@ export class WindowTracker {
     if (this.disposed) {
       return
     }
-    const count = unreadCount(owned, seen)
-    if (count !== this.lastCount) {
-      this.lastCount = count
-      this.onCount(count)
+    const glance = windowGlance(owned, seen)
+    const last = this.lastGlance
+    if (
+      last === null ||
+      last.unread !== glance.unread ||
+      last.working !== glance.working
+    ) {
+      this.lastGlance = glance
+      this.onGlance(glance)
     }
   }
 }

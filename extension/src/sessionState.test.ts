@@ -8,6 +8,7 @@ import {
   sessionDir,
   tabTitle,
   unreadCount,
+  windowGlance,
 } from './sessionState'
 import type { SessionEvent, SessionStatus } from './sessionState'
 
@@ -173,12 +174,36 @@ it('unreadCount counts only unread statuses', () => {
 })
 
 it.each([
-  [0, '○ aydy'],
-  [1, '● aydy'],
-  [2, '● 2 aydy'],
-  [9, '● 9 aydy'],
-  [10, '● 9+ aydy'],
-  [12, '● 9+ aydy'],
-])('tabTitle(%i)', (count, title) => {
-  expect(tabTitle(count, 'aydy')).toBe(title)
+  [{ unread: 0, working: false }, '○ aydy'],
+  [{ unread: 0, working: true }, '◐ aydy'],
+  [{ unread: 1, working: false }, '● aydy'],
+  [{ unread: 2, working: false }, '● 2 aydy'],
+  [{ unread: 9, working: false }, '● 9 aydy'],
+  [{ unread: 10, working: false }, '● 9+ aydy'],
+  [{ unread: 12, working: false }, '● 9+ aydy'],
+  [{ unread: 1, working: true }, '● aydy'],
+  [{ unread: 3, working: true }, '● 3 aydy'],
+])('tabTitle(%j)', (glance, title) => {
+  expect(tabTitle(glance, 'aydy')).toBe(title)
+})
+
+it('windowGlance is working only while a prompt runs', () => {
+  const none = new Map<string, number>()
+  expect(windowGlance([status('UserPromptSubmit', 100, 'a')], none)).toEqual({
+    unread: 0,
+    working: true,
+  })
+  expect(windowGlance([status('Notification', 100, 'a')], none)).toEqual({
+    unread: 1,
+    working: false,
+  })
+  expect(
+    windowGlance([status('Stop', 100, 'a')], new Map([['a', 200]])),
+  ).toEqual({ unread: 0, working: false })
+  expect(
+    windowGlance(
+      [status('Stop', 100, 'a'), status('UserPromptSubmit', 100, 'b')],
+      none,
+    ),
+  ).toEqual({ unread: 1, working: true })
 })
