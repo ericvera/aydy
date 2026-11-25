@@ -16,7 +16,7 @@
 ## Reviewer minors (not fixed)
 
 - extension.ts:112 — first `onGlance` can write an old-format `○ <basename>` title before the label resolves, then rewrite it.
-- extension.ts:141-146 — overlapping HEAD-watcher refreshes can leave an older branch in the title after fast back-to-back switches.
+- Fixed in 250e4ed: overlapping HEAD-watcher refreshes could leave an older branch in the title; now only the newest refresh sets the label.
 
 ## Amendments
 
