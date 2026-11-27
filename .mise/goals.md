@@ -24,20 +24,23 @@ New feature work; nothing to reproduce.
 4. Surfaces chosen from the mock: variant A (a line under each working popover row — progress/ETA, "Quiet Nm", or elapsed — plus a hollow dot when stale) and variant B (the same signal in the VS Code window title, ◌ glyph for stale). Also shipping the tray icon stale shape D1 from the mock (the first of variant D's two shapes; see .mise/mock/). Not shipping: C (Working now strip), D2, E1–E4.
 5. When one VS Code window has several working sessions, its title shows the most urgent one: stale first, then the shortest ETA.
 
+6. The progress skill ships as a Claude Code plugin from this repo's own marketplace (like mise), installed with `/plugin install`; the skill and its `aydy-progress` command live inside the plugin. AYDY does not write the skill into ~/.claude. This replaces the earlier assumption that AYDY installs it beside the hook script.
+7. The skill has no `--doing` option; it reports only `--eta` and optional `--step`.
+8. Folder-window fix (in scope): when a window opened as a plain folder has its sibling `.code-workspace` already open in another VS Code window (known from the app.aydy/windows registry), AYDY tells the owner the folder is already open as a workspace in another window instead of calling openFolder (which cannot reuse this window and just focuses the other one). Found when this repo's folder window showed no title status while a second window had aydy.code-workspace open.
+
 ## Assumptions
 
 - Agent-reported ETA is the primary "time left" signal; when an agent has not reported one, AYDY falls back to the session's latest TodoWrite checklist progress (e.g. 4/7) and the current turn's elapsed time.
 - An agent-reported ETA older than the turn it was reported in (a new prompt started since) is discarded.
 - Stale threshold N defaults to a fixed value (e.g. 5 minutes) chosen in the spec; not user-configurable in this run.
-- The skill is distributed by AYDY itself (installed alongside the hook script), so every Claude Code session on the machine can use it.
 - (mock) Stale ranks below the two unread states and above Working in the tray icon; the tray count for stale is the number of stale sessions.
 - (mock) The "Working now" strip (variant C) uses the session's longest completed turn as expected time when no ETA was reported.
 - (mock) In the VS Code window title (variant B), stale wins over progress and uses a new ◌ glyph; which session to show when one window has several working sessions is undecided.
-- (mock) The skill drives a CLI `aydy-progress --eta/--step/--doing`; the `--doing` phrase is not drawn on any surface yet.
+- (mock) The skill drives a CLI `aydy-progress --eta/--step`; the `--doing` phrase is not drawn on any surface yet.
 - (mock) Variant A breaks the one-line-row rule in menubar-ux.md for working rows.
 
 ## Proposal
 
 Issue: AYDY can't tell a busy session from a stuck one, and gives no sense of how much work is left.
-Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); an AYDY-installed skill + `aydy-progress` CLI lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale.
+Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); a skill shipped as a Claude Code plugin from this repo (with its `aydy-progress` command) lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale; a folder window whose workspace is open elsewhere says so instead of trying to reopen.
 Skips: none (spec and critic both run — new concept, multiple modules, writes into ~/.claude).
