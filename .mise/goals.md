@@ -39,5 +39,5 @@ New feature work; nothing to reproduce.
 ## Proposal
 
 Issue: AYDY can't tell a busy session from a stuck one, and gives no sense of how much work is left.
-Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); an AYDY-installed skill + `aydy-progress` CLI lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A) the VS Code window title (B), and the tray icon's D1 shape when any session is stale.
+Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); an AYDY-installed skill + `aydy-progress` CLI lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale.
 Skips: none (spec and critic both run — new concept, multiple modules, writes into ~/.claude).
