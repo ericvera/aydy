@@ -41,7 +41,8 @@ Everything goes through files under `~/Library/Application Support/app.aydy/`:
 
 - **`status/<session>.json`.** On activation the extension copies its hook script to
   `bin/aydy-hook.sh` there and adds it to the hooks in Claude Code's `settings.json`. Claude Code runs it on each hook event, and it writes the
-  event as that session's status file, removing it when the session ends.
+  event as that session's status file, removing it when the session ends. Informational
+  notifications (`agent_completed`, `auth_success`) are dropped, so the previous event stays.
 - **`seen/<session>.json`.** Each window writes one when you are looking at that
   window while one of its sessions has something new, which is what clears it.
 - **`windows/<pid>.json`.** Each window publishes its workspace folders under its
@@ -85,7 +86,7 @@ A window can show how many of its Claude Code sessions need you in its own title
 okven` for one, `● 3 okven` for several and `● 9+ okven` past nine. The count is this
 window's sessions that finished or asked for something since you last had the window
 focused. When none need you, the title shows `◐ okven` while a prompt is running in one
-of them and `○ okven` otherwise.
+of them, or while its subagents are still running after it stopped, and `○ okven` otherwise.
 
 The name after the glyph is the repository, with the worktree or branch after a `·`:
 `okven · eric-attribution-2` in a linked worktree, `okven · feat/x` in the main checkout

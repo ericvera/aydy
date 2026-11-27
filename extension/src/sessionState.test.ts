@@ -255,7 +255,7 @@ it.each([
   expect(windowGlance([result], none)).toEqual({ unread: 1, working: false })
 })
 
-it.each(['agent_completed', 'auth_success'])(
+it.each(['agent_completed', 'auth_success', ' agent_completed\n'])(
   'parseStatus: a %s notification is informational, neither unread nor working',
   (type) => {
     const result = parsed({

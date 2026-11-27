@@ -46,7 +46,8 @@ const subagentsRunning = (value: unknown): boolean =>
   )
 
 const isInformational = (value: unknown): boolean =>
-  typeof value === 'string' && INFORMATIONAL_NOTIFICATION_TYPES.has(value)
+  typeof value === 'string' &&
+  INFORMATIONAL_NOTIFICATION_TYPES.has(value.trim())
 
 export const parseStatus = (
   text: string,
