@@ -1,0 +1,1 @@
+there are 2 things I am having difficulty with. 1) the status of agents in terms of "is it stale or stuck" 2) some signal of how long until done and/or how much work is left. I am open to creative ideas for both whether it is through the current surfaces of aydy or a new one.
