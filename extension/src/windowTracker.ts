@@ -1,5 +1,4 @@
 import { watch } from 'node:fs'
-import type { FSWatcher } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 
 import { claudeSessionsDir, seenDir, statusDir, windowsDir } from './aydyPaths'
@@ -47,6 +46,19 @@ export interface WindowTrackerOptions {
   store?: TrackerStore
   debounceMs?: number
   pollMs?: number
+  /** Watches a directory, calling `onChange` on any change in it. */
+  watchDir?: WatchDir
+}
+
+export type WatchDir = (
+  dir: string,
+  onChange: () => void,
+) => { close: () => void }
+
+const watchWithFs: WatchDir = (dir, onChange) => {
+  const watcher = watch(dir, onChange)
+  watcher.on('error', () => undefined)
+  return watcher
 }
 
 export const TRACKER_DEBOUNCE_MS = 150
@@ -79,8 +91,9 @@ export class WindowTracker {
   private readonly store: TrackerStore
   private readonly debounceMs: number
   private readonly pollMs: number
+  private readonly watchDir: WatchDir
 
-  private watchers: FSWatcher[] = []
+  private watchers: { close: () => void }[] = []
   private timer: NodeJS.Timeout | null = null
   private poll: NodeJS.Timeout | null = null
   private running = false
@@ -97,6 +110,7 @@ export class WindowTracker {
     this.store = options.store ?? defaultStore(this.dirs)
     this.debounceMs = options.debounceMs ?? TRACKER_DEBOUNCE_MS
     this.pollMs = options.pollMs ?? TRACKER_POLL_MS
+    this.watchDir = options.watchDir ?? watchWithFs
   }
 
   async start(): Promise<void> {
@@ -113,11 +127,11 @@ export class WindowTracker {
     }
     for (const dir of watched) {
       try {
-        const watcher = watch(dir, () => {
-          this.poke()
-        })
-        watcher.on('error', () => undefined)
-        this.watchers.push(watcher)
+        this.watchers.push(
+          this.watchDir(dir, () => {
+            this.poke()
+          }),
+        )
       } catch {
         // Polling covers a directory that cannot be watched.
       }

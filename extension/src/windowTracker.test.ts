@@ -9,7 +9,7 @@ import type {
   WindowFolders,
   WindowGlance,
 } from './sessionState'
-import type { TrackerDirs, TrackerStore } from './windowTracker'
+import type { TrackerDirs, TrackerStore, WatchDir } from './windowTracker'
 import { WindowTracker } from './windowTracker'
 
 const DEBOUNCE_MS = 150
@@ -124,9 +124,19 @@ const settle = async (): Promise<void> => {
   }
 }
 
+// Real watchers on freshly made directories can deliver a late event for
+// their creation at any moment, which adds an unplanned pass. Tests drive
+// passes with poke() unless they pass a watcher of their own.
+const noWatch: WatchDir = () => ({ close: () => undefined })
+
 const startTracker = async (
   w: FakeWorld,
-  { folders = ['/a'], focused = false, store = storeFor(w) } = {},
+  {
+    folders = ['/a'],
+    focused = false,
+    store = storeFor(w),
+    watchDir = noWatch,
+  } = {},
 ): Promise<Started> => {
   let isFocused = focused
   const counts: number[] = []
@@ -143,6 +153,7 @@ const startTracker = async (
     dirs,
     store,
     debounceMs: DEBOUNCE_MS,
+    watchDir,
   })
   trackers.push(tracker)
   await tracker.start()
@@ -405,6 +416,39 @@ it('a focused pass followed by its own watch event does not write again', async 
   await settle()
 
   expect(w.writes).toEqual(['s1'])
+})
+
+it('a change in any watched directory runs a pass', async () => {
+  const w = world({
+    statuses: [status('s1', 'Stop', '/a')],
+    live: liveIn(['s1', null]),
+  })
+  const changes = new Map<string, () => void>()
+  let calls = 0
+  const base = storeFor(w)
+  const store: TrackerStore = {
+    ...base,
+    readStatuses: async () => {
+      calls += 1
+      return base.readStatuses()
+    },
+  }
+  const { dirs } = await startTracker(w, {
+    store,
+    watchDir: (dir, onChange) => {
+      changes.set(dir, onChange)
+      return { close: () => undefined }
+    },
+  })
+  expect([...changes.keys()]).toEqual([dirs.status, dirs.seen, dirs.windows])
+  expect(calls).toBe(1)
+
+  for (const onChange of changes.values()) {
+    onChange()
+    await settle()
+  }
+
+  expect(calls).toBe(4)
 })
 
 it('passes never overlap, and a poke during a pass runs one more', async () => {
