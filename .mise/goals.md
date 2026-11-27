@@ -1,0 +1,1 @@
+I am seeing that sometimes, even though agents are working, the window tab name shows the open circle icon. Could that be related to agents? Is it possible to also not make sound for intermediary messages and only do it when the main session is "done" and there is no sub-agent still working?
