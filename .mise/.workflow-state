@@ -3,7 +3,7 @@
   "started": "2026-11-27T22:48:54.768Z",
   "base": "main",
   "steps": {
-    "goals": null,
+    "goals": "done",
     "spec": null,
     "critic": null,
     "execute": null,
