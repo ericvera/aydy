@@ -21,6 +21,9 @@ New feature work; nothing to reproduce.
 2. Progress / time left: the owner wants a skill that AYDY provides to agents so agents can report their own ETA (and progress) somewhere AYDY reads it.
 3. Surfaces: the owner wants to see mocks of the surface options before choosing — popover line under each row with progress + "quiet Nm" and a hollow/dimmed dot when stale; the same plus the VS Code window title (e.g. "◐ 4/7"); a new popover strip of working sessions' elapsed time vs expected; tray icon shape change when any session is stale — plus other creative ideas. The mock shows each option as a separate, labelled variant side by side so the owner can pick.
 
+4. Surfaces chosen from the mock: variant A (a line under each working popover row — progress/ETA, "Quiet Nm", or elapsed — plus a hollow dot when stale) and variant B (the same signal in the VS Code window title, ◌ glyph for stale). Not shipping: C (Working now strip), D (tray icon shape), E1–E4.
+5. When one VS Code window has several working sessions, its title shows the most urgent one: stale first, then the shortest ETA.
+
 ## Assumptions
 
 - Agent-reported ETA is the primary "time left" signal; when an agent has not reported one, AYDY falls back to the session's latest TodoWrite checklist progress (e.g. 4/7) and the current turn's elapsed time.
@@ -36,5 +39,5 @@ New feature work; nothing to reproduce.
 ## Proposal
 
 Issue: AYDY can't tell a busy session from a stuck one, and gives no sense of how much work is left.
-Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); an AYDY-installed skill + `aydy-progress` CLI lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are the mock variants the owner picks.
+Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); an AYDY-installed skill + `aydy-progress` CLI lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A) and the VS Code window title (B).
 Skips: none (spec and critic both run — new concept, multiple modules, writes into ~/.claude).
