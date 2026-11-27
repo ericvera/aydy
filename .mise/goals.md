@@ -28,6 +28,8 @@ New feature work; nothing to reproduce.
 7. The skill has no `--doing` option; it reports only `--eta` and optional `--step`.
 8. Folder-window fix (in scope): when a window opened as a plain folder has its sibling `.code-workspace` already open in another VS Code window (known from the app.aydy/windows registry), AYDY tells the owner the folder is already open as a workspace in another window instead of calling openFolder (which cannot reuse this window and just focuses the other one). Found when this repo's folder window showed no title status while a second window had aydy.code-workspace open.
 
+9. mise integration is documentation only: the plugin's README shows a Skills & guides line a repo can paste into its `.claude/mise-config.md` (e.g. `- aydy:progress (skill): at the start of each task and after each step`). No change to mise itself, now or as a planned follow-up.
+
 ## Assumptions
 
 - Agent-reported ETA is the primary "time left" signal; when an agent has not reported one, AYDY falls back to the session's latest TodoWrite checklist progress (e.g. 4/7) and the current turn's elapsed time.
@@ -42,5 +44,5 @@ New feature work; nothing to reproduce.
 ## Proposal
 
 Issue: AYDY can't tell a busy session from a stuck one, and gives no sense of how much work is left.
-Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); a skill shipped as a Claude Code plugin from this repo (with its `aydy-progress` command) lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale; a folder window whose workspace is open elsewhere says so instead of trying to reopen.
+Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); a skill shipped as a Claude Code plugin from this repo (with its `aydy-progress` command) lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale; a folder window whose workspace is open elsewhere says so instead of trying to reopen; the plugin README documents a mise Skills & guides line.
 Skips: none (spec and critic both run — new concept, multiple modules, writes into ~/.claude).
