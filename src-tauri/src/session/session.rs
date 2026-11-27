@@ -115,7 +115,9 @@ impl Session {
         self.facts.presence_confirmed = true;
 
         match kind {
-            HookEventKind::SessionStart | HookEventKind::SessionEnd => {}
+            HookEventKind::SessionStart
+            | HookEventKind::SessionEnd
+            | HookEventKind::Informational => {}
             HookEventKind::UserPromptSubmit => {
                 self.facts.waiting = false;
                 self.facts.turn_open = true;
@@ -124,6 +126,11 @@ impl Session {
             HookEventKind::Notification { message } => {
                 self.facts.waiting = true;
                 self.notification_message = message.clone();
+            }
+            HookEventKind::SubagentsRunning => {
+                self.facts.waiting = false;
+                self.facts.turn_open = true;
+                self.timing.start_turn(now);
             }
             HookEventKind::Stop => {
                 self.facts.waiting = false;
@@ -380,6 +387,43 @@ mod tests {
         session.apply_hook(&HookEventKind::UserPromptSubmit, start);
         session.apply_hook(&HookEventKind::Stop, start + minutes(5));
 
+        assert_eq!(session.status(), SessionStatus::Done);
+    }
+
+    #[test]
+    fn a_stop_while_subagents_run_keeps_the_turn_working() {
+        let start = Instant::now();
+        let mut session = Session::new("session-1".to_string(), start);
+
+        session.apply_hook(&HookEventKind::UserPromptSubmit, start);
+        session.apply_hook(&HookEventKind::SubagentsRunning, start + minutes(5));
+
+        assert_eq!(session.status(), SessionStatus::Working);
+        assert_eq!(session.working_time(start + minutes(20)), minutes(20));
+    }
+
+    #[test]
+    fn a_stop_after_subagents_finish_returns_the_session_to_done() {
+        let start = Instant::now();
+        let mut session = Session::new("session-1".to_string(), start);
+
+        session.apply_hook(&HookEventKind::SubagentsRunning, start);
+        session.apply_hook(&HookEventKind::Stop, start + minutes(5));
+
+        assert_eq!(session.status(), SessionStatus::Done);
+    }
+
+    #[test]
+    fn an_informational_notification_changes_no_status() {
+        let start = Instant::now();
+        let mut session = Session::new("session-1".to_string(), start);
+
+        session.apply_hook(&HookEventKind::UserPromptSubmit, start);
+        session.apply_hook(&HookEventKind::Informational, start + minutes(1));
+        assert_eq!(session.status(), SessionStatus::Working);
+
+        session.apply_hook(&HookEventKind::Stop, start + minutes(2));
+        session.apply_hook(&HookEventKind::Informational, start + minutes(3));
         assert_eq!(session.status(), SessionStatus::Done);
     }
 

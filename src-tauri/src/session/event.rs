@@ -7,7 +7,7 @@ use crate::session::status::SessionStatus;
 /// A Claude Code session id.
 pub type SessionId = String;
 
-/// The five Claude Code hook events the app registers for.
+/// The kinds of event the five Claude Code hooks the app registers for produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookEventKind {
     /// A session began.
@@ -17,8 +17,14 @@ pub enum HookEventKind {
     /// Claude is waiting on the user, with the message describing what is being
     /// awaited when Claude Code supplies one.
     Notification { message: Option<String> },
+    /// A notification that tells the user something but asks nothing of them,
+    /// such as a background agent completing.
+    Informational,
     /// A turn completed.
     Stop,
+    /// A turn's `Stop` arrived while subagents it started are still running;
+    /// the session is still working.
+    SubagentsRunning,
     /// The session ended.
     SessionEnd,
 }

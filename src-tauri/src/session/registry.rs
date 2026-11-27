@@ -164,21 +164,25 @@ impl SessionRegistry {
     ///
     /// Only a `Stop` or `Notification` asks for attention, and any other event
     /// withdraws it, so a session is unread exactly while its last event is one
-    /// of those two and is newer than its seen time.
+    /// of those two and is newer than its seen time. An informational
+    /// notification is the exception: it asks for nothing, so it neither raises
+    /// nor withdraws attention.
     pub fn apply_status(&mut self, record: StatusRecord, now_ms: u64) {
         let now = self.clock.now();
         let age = Duration::from_millis(now_ms.saturating_sub(record.written_at_ms));
         let at = now.checked_sub(age).unwrap_or(now);
         let session_id = record.event.session_id.clone();
-        let attention = matches!(
-            record.event.kind,
-            HookEventKind::Stop | HookEventKind::Notification { .. }
-        )
-        .then_some(record.written_at_ms);
+        let attention = match record.event.kind {
+            HookEventKind::Stop | HookEventKind::Notification { .. } => {
+                Some(Some(record.written_at_ms))
+            }
+            HookEventKind::Informational => None,
+            _ => Some(None),
+        };
 
         self.apply_event(record.event, at);
 
-        if let Some(session) = self.sessions.get_mut(&session_id) {
+        if let (Some(attention), Some(session)) = (attention, self.sessions.get_mut(&session_id)) {
             session.attention_at_ms = attention;
         }
     }
@@ -1046,6 +1050,51 @@ mod tests {
         assert!(is_unread(&mut registry, "session-1"));
 
         registry.apply_seen("session-1", NOW_MS);
+        assert!(!is_unread(&mut registry, "session-1"));
+    }
+
+    #[test]
+    fn a_stop_while_subagents_run_is_not_unread() {
+        let (_clock, mut registry) = dated_registry();
+
+        registry.apply_status(
+            status("session-1", HookEventKind::SubagentsRunning, NOW_MS - 1_000),
+            NOW_MS,
+        );
+
+        assert!(!is_unread(&mut registry, "session-1"));
+    }
+
+    #[test]
+    fn an_informational_notification_leaves_an_unread_stop_unread() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 2_000),
+            NOW_MS,
+        );
+
+        registry.apply_status(
+            status("session-1", HookEventKind::Informational, NOW_MS - 1_000),
+            NOW_MS,
+        );
+
+        assert!(is_unread(&mut registry, "session-1"));
+    }
+
+    #[test]
+    fn an_informational_notification_leaves_a_seen_stop_read() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::Stop, NOW_MS - 3_000),
+            NOW_MS,
+        );
+        registry.apply_seen("session-1", NOW_MS - 2_000);
+
+        registry.apply_status(
+            status("session-1", HookEventKind::Informational, NOW_MS - 1_000),
+            NOW_MS,
+        );
+
         assert!(!is_unread(&mut registry, "session-1"));
     }
 
