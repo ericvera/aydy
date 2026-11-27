@@ -1,4 +1,5 @@
-import type { SessionEvent, SessionStatus } from './sessionState'
+import type { SessionStatus } from './sessionState'
+import { isWorking } from './sessionState'
 import type { WorkspaceDirs } from './workspaceFile'
 import {
   legacyWorkspacePath,
@@ -16,19 +17,19 @@ export interface WindowContents {
   checkFailed: boolean
 }
 
-/** Whether a session whose last hook event is `event` is working or waiting. */
-export const isActive = (event: SessionEvent | undefined): boolean =>
-  event === 'UserPromptSubmit' || event === 'Notification'
+/** Whether a session is working or waiting on a real notification. */
+export const isActive = (status: SessionStatus | undefined): boolean =>
+  status !== undefined &&
+  (isWorking(status) ||
+    (status.event === 'Notification' && !status.informational))
 
 /** How many of `sessionIds` are working or waiting; no status means idle. */
 export const countActive = (
   sessionIds: readonly string[],
   statuses: readonly SessionStatus[],
 ): number => {
-  const events = new Map(
-    statuses.map((status) => [status.sessionId, status.event]),
-  )
-  return sessionIds.filter((id) => isActive(events.get(id))).length
+  const byId = new Map(statuses.map((status) => [status.sessionId, status]))
+  return sessionIds.filter((id) => isActive(byId.get(id))).length
 }
 
 /** Why reopening this window now would lose something; none when safe. */

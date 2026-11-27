@@ -64,7 +64,14 @@ it('status and seen files: round-trips statuses and seen times', async () => {
   await writeSeen('s2', 456, dirs)
 
   expect(await readStatuses(dirs)).toEqual([
-    { sessionId: 's1', event: 'Stop', cwd: '/a', eventAt: 1_700_000_000_000 },
+    {
+      sessionId: 's1',
+      event: 'Stop',
+      cwd: '/a',
+      eventAt: 1_700_000_000_000,
+      subagentsRunning: false,
+      informational: false,
+    },
   ])
   expect(await readSeen(dirs)).toEqual(
     new Map([

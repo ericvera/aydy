@@ -545,6 +545,43 @@ mod tests {
         assert_eq!(harness.asked(), vec![Sound::NeedsInput]);
     }
 
+    #[test]
+    fn a_stop_while_subagents_run_plays_nothing_until_the_turn_really_ends() {
+        let mut harness = Harness::new();
+        harness.working("session-1");
+
+        harness.hook("session-1", HookEventKind::SubagentsRunning);
+        harness.observe();
+        assert_eq!(harness.asked(), Vec::<Sound>::new());
+
+        harness.hook("session-1", HookEventKind::Stop);
+        harness.observe();
+        assert_eq!(harness.asked(), vec![Sound::Finished]);
+    }
+
+    #[test]
+    fn an_informational_notification_mid_turn_plays_nothing() {
+        let mut harness = Harness::new();
+        harness.working("session-1");
+
+        harness.hook("session-1", HookEventKind::Informational);
+        harness.observe();
+
+        assert_eq!(harness.asked(), Vec::<Sound>::new());
+    }
+
+    #[test]
+    fn an_informational_notification_after_a_finished_turn_plays_nothing() {
+        let mut harness = Harness::new();
+        harness.hook("session-1", HookEventKind::SessionStart);
+        harness.observe();
+
+        harness.hook("session-1", HookEventKind::Informational);
+        harness.observe();
+
+        assert_eq!(harness.asked(), Vec::<Sound>::new());
+    }
+
     /// The two events have to be told apart from across a room, which is the
     /// only place they are ever heard from.
     #[test]

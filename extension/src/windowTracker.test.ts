@@ -59,7 +59,14 @@ const status = (
   event: SessionEvent,
   cwd: string | null,
   eventAt = NOW - 1000,
-): SessionStatus => ({ sessionId, event, cwd, eventAt })
+): SessionStatus => ({
+  sessionId,
+  event,
+  cwd,
+  eventAt,
+  subagentsRunning: false,
+  informational: false,
+})
 
 interface FakeWorld {
   statuses: SessionStatus[]

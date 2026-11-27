@@ -221,9 +221,14 @@ session list and nowhere else — no other screen in the mock has a footer.
 ### What clears an unread
 
 A session is **unread** when its last event is a `Stop` or a `Notification` and
-that event is newer than the session's last seen time. Any later event — a new
-prompt, a fresh start — makes it read again whatever the seen time says. There
-is no dismiss control. Two things write a seen time, and nothing else:
+that event is newer than the session's last seen time. A `Stop` sent while
+subagents the turn started are still running is not a finished turn: the session
+stays Working and is not unread until a `Stop` with no running subagents
+arrives. Informational notifications — a background agent completing, a sign-in
+succeeding — neither raise nor clear an unread and play no sound. Any later
+event — a new prompt, a fresh start — makes it read again whatever the seen time
+says. There is no dismiss control. Two things write a seen time, and nothing
+else:
 
 - **The VS Code window that owns the session, while it has focus.** It marks
   every one of its sessions seen when it gains focus, and again whenever one of
@@ -236,8 +241,9 @@ is no dismiss control. Two things write a seen time, and nothing else:
 The VS Code tab count — `● N repo · branch` in each window's title — counts
 that window's unread sessions by the same rule, read from the same files, so the
 window and the popover cannot disagree about what is new. With nothing unread,
-the title shows `◐` while one of the window's prompts is running, matching the
-menubar's working ring, and `○` otherwise.
+the title shows `◐` while one of the window's prompts is running, or while a
+session's subagents are still running, matching the menubar's working ring, and
+`○` otherwise.
 
 ### What a jump does, and what it says when it cannot
 

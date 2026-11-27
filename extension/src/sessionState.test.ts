@@ -17,7 +17,14 @@ const status = (
   eventAt = 100,
   sessionId = 's1',
   cwd: string | null = '/a',
-): SessionStatus => ({ sessionId, event, cwd, eventAt })
+): SessionStatus => ({
+  sessionId,
+  event,
+  cwd,
+  eventAt,
+  subagentsRunning: false,
+  informational: false,
+})
 
 it.each(['SessionStart', 'UserPromptSubmit', 'Notification', 'Stop'] as const)(
   'parseStatus: parses %s',
@@ -33,6 +40,8 @@ it.each(['SessionStart', 'UserPromptSubmit', 'Notification', 'Stop'] as const)(
       event,
       cwd: '/a/b',
       eventAt: 42,
+      subagentsRunning: false,
+      informational: false,
     })
   },
 )
@@ -206,4 +215,67 @@ it('windowGlance is working only while a prompt runs', () => {
       none,
     ),
   ).toEqual({ unread: 1, working: true })
+})
+
+const parsed = (fields: Record<string, unknown>): SessionStatus => {
+  const result = parseStatus(
+    JSON.stringify({ session_id: 's1', cwd: '/a', ...fields }),
+    100,
+  )
+  if (result === null) {
+    throw new Error('expected a status')
+  }
+  return result
+}
+
+const none = new Map<string, number>()
+
+it('parseStatus: a Stop with a running subagent is working, not unread', () => {
+  const result = parsed({
+    hook_event_name: 'Stop',
+    background_tasks: [{ type: 'subagent', status: 'running' }],
+  })
+  expect(result.subagentsRunning).toBe(true)
+  expect(isUnread(result, undefined)).toBe(false)
+  const glance = windowGlance([result], none)
+  expect(glance).toEqual({ unread: 0, working: true })
+  expect(tabTitle(glance, 'aydy')).toBe('◐ aydy')
+})
+
+it.each([
+  ['only a running shell', [{ type: 'shell', status: 'running' }]],
+  ['a finished subagent', [{ type: 'subagent', status: 'completed' }]],
+  ['no tasks', []],
+  ['a malformed value', 'running'],
+  ['malformed entries', [null, 'subagent', 7]],
+  ['no field', undefined],
+])('parseStatus: a Stop with %s is unread, not working', (_label, tasks) => {
+  const result = parsed({ hook_event_name: 'Stop', background_tasks: tasks })
+  expect(result.subagentsRunning).toBe(false)
+  expect(windowGlance([result], none)).toEqual({ unread: 1, working: false })
+})
+
+it.each(['agent_completed', 'auth_success', ' agent_completed\n'])(
+  'parseStatus: a %s notification is informational, neither unread nor working',
+  (type) => {
+    const result = parsed({
+      hook_event_name: 'Notification',
+      notification_type: type,
+    })
+    expect(result.informational).toBe(true)
+    expect(windowGlance([result], none)).toEqual({ unread: 0, working: false })
+  },
+)
+
+it.each([
+  ['permission_prompt', 'permission_prompt'],
+  ['no type', undefined],
+  ['a non-string type', ['agent_completed']],
+])('parseStatus: a notification with %s is still unread', (_label, type) => {
+  const result = parsed({
+    hook_event_name: 'Notification',
+    notification_type: type,
+  })
+  expect(result.informational).toBe(false)
+  expect(isUnread(result, undefined)).toBe(true)
 })

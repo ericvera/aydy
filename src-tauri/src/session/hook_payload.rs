@@ -27,7 +27,15 @@ pub struct HookPayload {
     /// message is missing, so that something describes the wait rather than
     /// nothing.
     pub notification_type: Option<String>,
+    /// `Stop` only: the background work still attached to the session, kept as
+    /// raw JSON so a malformed value counts as none instead of failing the
+    /// payload.
+    pub background_tasks: Option<serde_json::Value>,
 }
+
+/// The `notification_type`s that tell the user something without asking
+/// anything of them.
+const INFORMATIONAL_NOTIFICATION_TYPES: [&str; 2] = ["agent_completed", "auth_success"];
 
 impl HookPayload {
     /// The registry event this payload describes, or `None` when it names no
@@ -38,13 +46,23 @@ impl HookPayload {
         let kind = match self.hook_event_name.as_deref() {
             Some("SessionStart") => HookEventKind::SessionStart,
             Some("UserPromptSubmit") => HookEventKind::UserPromptSubmit,
+            Some("Notification")
+                if self.notification_type.as_deref().is_some_and(|kind| {
+                    INFORMATIONAL_NOTIFICATION_TYPES.contains(&kind.trim())
+                }) =>
+            {
+                HookEventKind::Informational
+            }
             // When the message is missing the fallback is the raw enum token —
-            // `permission_prompt`, `idle_prompt`, `auth_success`,
-            // `agent_completed` — not copy written for a person, so anything
-            // showing this to the user has to translate it first.
+            // `permission_prompt`, `idle_prompt` and friends — not copy written
+            // for a person, so anything showing this to the user has to
+            // translate it first.
             Some("Notification") => HookEventKind::Notification {
                 message: present(self.message).or_else(|| present(self.notification_type)),
             },
+            Some("Stop") if subagents_running(self.background_tasks.as_ref()) => {
+                HookEventKind::SubagentsRunning
+            }
             Some("Stop") => HookEventKind::Stop,
             Some("SessionEnd") => HookEventKind::SessionEnd,
             _ => return None,
@@ -57,6 +75,17 @@ impl HookPayload {
             kind,
         })
     }
+}
+
+fn subagents_running(tasks: Option<&serde_json::Value>) -> bool {
+    tasks
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tasks| {
+            tasks.iter().any(|task| {
+                task.get("type").and_then(serde_json::Value::as_str) == Some("subagent")
+                    && task.get("status").and_then(serde_json::Value::as_str) == Some("running")
+            })
+        })
 }
 
 pub fn present(value: Option<String>) -> Option<String> {
@@ -96,6 +125,77 @@ mod tests {
         let event = payload(r#"{"session_id":"s1","hook_event_name":"Stop"}"#).expect("an event");
 
         assert_eq!(event.kind, HookEventKind::Stop);
+    }
+
+    #[test]
+    fn a_stop_while_a_subagent_is_running_becomes_a_subagents_running_event() {
+        let event = payload(
+            r#"{"session_id":"s1","hook_event_name":"Stop","background_tasks":[{"id":"a4cf","type":"subagent","status":"running","agent_type":"mise:runner"}]}"#,
+        )
+        .expect("an event");
+
+        assert_eq!(event.kind, HookEventKind::SubagentsRunning);
+    }
+
+    #[test]
+    fn a_stop_with_no_running_subagent_is_a_stop() {
+        for tasks in [
+            r#""background_tasks":[],"#,
+            r#""background_tasks":[{"type":"shell","status":"running"}],"#,
+            r#""background_tasks":[{"type":"subagent","status":"completed"}],"#,
+            "",
+        ] {
+            let body = format!(r#"{{{tasks}"session_id":"s1","hook_event_name":"Stop"}}"#);
+
+            assert_eq!(
+                payload(&body).expect("an event").kind,
+                HookEventKind::Stop,
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stop_with_malformed_background_tasks_is_a_stop() {
+        for tasks in [r#""oops""#, r#"[1, null, {"type":"subagent"}]"#] {
+            let body = format!(
+                r#"{{"session_id":"s1","hook_event_name":"Stop","background_tasks":{tasks}}}"#
+            );
+
+            assert_eq!(
+                payload(&body).expect("an event").kind,
+                HookEventKind::Stop,
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_informational_notification_becomes_an_informational_event() {
+        for body in [
+            r#"{"session_id":"s1","hook_event_name":"Notification","notification_type":"agent_completed"}"#,
+            r#"{"session_id":"s1","hook_event_name":"Notification","notification_type":"auth_success","message":"Signed in"}"#,
+        ] {
+            assert_eq!(
+                payload(body).expect("an event").kind,
+                HookEventKind::Informational,
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prompt_notification_still_asks_for_input() {
+        for kind in ["permission_prompt", "idle_prompt"] {
+            let body = format!(
+                r#"{{"session_id":"s1","hook_event_name":"Notification","notification_type":"{kind}"}}"#
+            );
+
+            assert!(matches!(
+                payload(&body).expect("an event").kind,
+                HookEventKind::Notification { .. }
+            ));
+        }
     }
 
     #[test]

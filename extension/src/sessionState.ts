@@ -6,6 +6,8 @@ export interface SessionStatus {
   event: SessionEvent
   cwd: string | null
   eventAt: number
+  subagentsRunning: boolean
+  informational: boolean
 }
 
 export interface WindowFolders {
@@ -22,11 +24,30 @@ const EVENTS: ReadonlySet<string> = new Set<SessionEvent>([
   'Stop',
 ])
 
+const INFORMATIONAL_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
+  'agent_completed',
+  'auth_success',
+])
+
 const isEvent = (value: unknown): value is SessionEvent =>
   typeof value === 'string' && EVENTS.has(value)
 
 const nonEmptyString = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null
+
+const subagentsRunning = (value: unknown): boolean =>
+  Array.isArray(value) &&
+  value.some(
+    (task: unknown) =>
+      typeof task === 'object' &&
+      task !== null &&
+      (task as Record<string, unknown>)['type'] === 'subagent' &&
+      (task as Record<string, unknown>)['status'] === 'running',
+  )
+
+const isInformational = (value: unknown): boolean =>
+  typeof value === 'string' &&
+  INFORMATIONAL_NOTIFICATION_TYPES.has(value.trim())
 
 export const parseStatus = (
   text: string,
@@ -55,6 +76,10 @@ export const parseStatus = (
     event,
     cwd: nonEmptyString(record['cwd']),
     eventAt: mtimeMs,
+    subagentsRunning:
+      event === 'Stop' && subagentsRunning(record['background_tasks']),
+    informational:
+      event === 'Notification' && isInformational(record['notification_type']),
   }
 }
 
@@ -62,7 +87,8 @@ export const isUnread = (
   status: SessionStatus,
   seenAt: number | undefined,
 ): boolean =>
-  (status.event === 'Stop' || status.event === 'Notification') &&
+  ((status.event === 'Stop' && !status.subagentsRunning) ||
+    (status.event === 'Notification' && !status.informational)) &&
   status.eventAt > (seenAt ?? 0)
 
 export const sessionDir = (
@@ -119,7 +145,8 @@ export const unreadCount = (
     .length
 
 export const isWorking = (status: SessionStatus): boolean =>
-  status.event === 'UserPromptSubmit'
+  status.event === 'UserPromptSubmit' ||
+  (status.event === 'Stop' && status.subagentsRunning)
 
 export interface WindowGlance {
   unread: number
