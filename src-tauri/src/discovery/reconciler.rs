@@ -493,6 +493,8 @@ mod tests {
     struct SlowProcesses {
         delay: Duration,
         passes: Arc<AtomicUsize>,
+        /// When each pass began, so a test can measure start-to-start gaps.
+        starts: Arc<Mutex<Vec<std::time::Instant>>>,
         processes: FixedProcesses,
     }
 
@@ -501,6 +503,7 @@ mod tests {
             Self {
                 delay,
                 passes: Arc::new(AtomicUsize::new(0)),
+                starts: Arc::new(Mutex::new(Vec::new())),
                 processes: FixedProcesses::new(alive),
             }
         }
@@ -508,6 +511,7 @@ mod tests {
 
     impl ProcessTable for SlowProcesses {
         fn is_alive(&self, pid: u32) -> bool {
+            lock_recovering(&self.starts).push(std::time::Instant::now());
             std::thread::sleep(self.delay);
             self.passes.fetch_add(1, Ordering::Relaxed);
 
@@ -1359,8 +1363,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_time_a_pass_takes_comes_out_of_the_period_rather_than_adding_to_it() {
-        const PERIOD: Duration = Duration::from_millis(200);
-        const PASS: Duration = Duration::from_millis(160);
+        const PERIOD: Duration = Duration::from_millis(300);
+        const PASS: Duration = Duration::from_millis(250);
         const PASSES: usize = 4;
 
         let cwd = scratch_dir("period");
@@ -1372,8 +1376,8 @@ mod tests {
         let registry = Arc::new(Mutex::new(SessionRegistry::new(clock.clone())));
         let processes = Arc::new(SlowProcesses::new(PASS, [11]));
         let counted = Arc::clone(&processes.passes);
+        let starts = Arc::clone(&processes.starts);
         let (signal, shutdown) = oneshot::channel();
-        let started = std::time::Instant::now();
         let scan = tokio::spawn(run_every(
             PERIOD,
             Reconciler::new(&dir, scratch_dir("no-projects"), processes),
@@ -1384,7 +1388,6 @@ mod tests {
         while counted.load(Ordering::Relaxed) < PASSES {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let took = started.elapsed();
 
         ScanShutdown::new(signal).trigger();
         tokio::time::timeout(Duration::from_secs(5), scan)
@@ -1392,14 +1395,23 @@ mod tests {
             .expect("the scan to stop when asked")
             .expect("the scan not to panic");
 
-        // Four passes are three periods plus the last pass. Sleeping between
-        // passes instead would make it three periods plus four passes, which
-        // is what puts the detection budget over its ceiling.
-        let bound = PERIOD * 3 + PASS + PASS * 3 / 2;
+        // Sleeping a period after each pass would put every pass start at
+        // least PERIOD + PASS after the previous one: both waits are lower
+        // bounds, so no scheduling delay can make that case pass. Taking the
+        // pass out of the period puts starts about PERIOD apart, and a slow
+        // machine only adds delay, so the quickest gap is the one that tells
+        // the two apart without depending on how busy the runner is.
+        let starts = lock_recovering(&starts).clone();
+        let quickest = starts
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .min()
+            .expect("at least two passes to have started");
 
         assert!(
-            took < bound,
-            "{PASSES} passes {PERIOD:?} apart took {took:?}, so the pass itself is being added to the period"
+            quickest < PERIOD + PASS,
+            "the quickest of {} pass starts {PERIOD:?} apart was {quickest:?}, so the pass itself is being added to the period",
+            starts.len()
         );
     }
 
