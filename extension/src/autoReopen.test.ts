@@ -89,32 +89,48 @@ it('unsafeReasons: lists everything in order', () => {
   ])
 })
 
+const status = (
+  sessionId: string,
+  event: SessionEvent,
+  flags: Partial<
+    Pick<SessionStatus, 'subagentsRunning' | 'informational'>
+  > = {},
+): SessionStatus => ({
+  sessionId,
+  event,
+  cwd: null,
+  eventAt: 0,
+  subagentsRunning: false,
+  informational: false,
+  ...flags,
+})
+
 it('isActive: working and waiting are active, idle is not', () => {
-  expect(isActive('UserPromptSubmit')).toBe(true)
-  expect(isActive('Notification')).toBe(true)
-  expect(isActive('Stop')).toBe(false)
-  expect(isActive('SessionStart')).toBe(false)
+  expect(isActive(status('a', 'UserPromptSubmit'))).toBe(true)
+  expect(isActive(status('a', 'Notification'))).toBe(true)
+  expect(isActive(status('a', 'Stop', { subagentsRunning: true }))).toBe(true)
+  expect(isActive(status('a', 'Stop'))).toBe(false)
+  expect(isActive(status('a', 'Notification', { informational: true }))).toBe(
+    false,
+  )
+  expect(isActive(status('a', 'SessionStart'))).toBe(false)
   expect(isActive(undefined)).toBe(false)
 })
 
 it('countActive: joins by session id, treating no status as idle', () => {
-  const status = (sessionId: string, event: SessionEvent): SessionStatus => ({
-    sessionId,
-    event,
-    cwd: null,
-    eventAt: 0,
-  })
   expect(
     countActive(
-      ['working', 'waiting', 'idle', 'new'],
+      ['working', 'waiting', 'subagents', 'idle', 'informed', 'new'],
       [
         status('working', 'UserPromptSubmit'),
         status('waiting', 'Notification'),
+        status('subagents', 'Stop', { subagentsRunning: true }),
         status('idle', 'Stop'),
+        status('informed', 'Notification', { informational: true }),
         status('elsewhere', 'UserPromptSubmit'),
       ],
     ),
-  ).toBe(2)
+  ).toBe(3)
 })
 
 it('listReasons: joins as prose', () => {

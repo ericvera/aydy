@@ -99,3 +99,31 @@ it('ignores a session id embedded in a string value', () => {
 
   expect(statusEntries()).toEqual([`${SESSION}.json`])
 })
+
+const notification = (type: string): string =>
+  `${payload({
+    hook_event_name: 'Notification',
+    notification_type: type,
+    session_id: SESSION,
+  })}\n`
+
+it.each(['agent_completed', 'auth_success'])(
+  'keeps the previous payload for a %s notification',
+  (type) => {
+    runHook(`${stop}\n`)
+    runHook(notification(type))
+
+    expect(readFileSync(join(statusDir(), `${SESSION}.json`), 'utf8')).toBe(
+      `${stop}\n`,
+    )
+  },
+)
+
+it('overwrites the previous payload for a permission prompt', () => {
+  runHook(`${stop}\n`)
+  runHook(notification('permission_prompt'))
+
+  expect(readFileSync(join(statusDir(), `${SESSION}.json`), 'utf8')).toBe(
+    notification('permission_prompt'),
+  )
+})
