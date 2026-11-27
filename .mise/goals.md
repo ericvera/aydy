@@ -45,4 +45,4 @@ New feature work; nothing to reproduce.
 
 Issue: AYDY can't tell a busy session from a stuck one, and gives no sense of how much work is left.
 Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); a skill shipped as a Claude Code plugin from this repo (with its `aydy-progress` command) lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale; a folder window whose workspace is open elsewhere says so instead of trying to reopen; the plugin README documents a mise Skills & guides line.
-Skips: none (spec and critic both run — new concept, multiple modules, writes into ~/.claude).
+Skips: none (spec and critic both run — new concept, Rust core + popover + extension + a new plugin).
