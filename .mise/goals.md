@@ -27,3 +27,14 @@ New feature work; nothing to reproduce.
 - An agent-reported ETA older than the turn it was reported in (a new prompt started since) is discarded.
 - Stale threshold N defaults to a fixed value (e.g. 5 minutes) chosen in the spec; not user-configurable in this run.
 - The skill is distributed by AYDY itself (installed alongside the hook script), so every Claude Code session on the machine can use it.
+- (mock) Stale ranks below the two unread states and above Working in the tray icon; the tray count for stale is the number of stale sessions.
+- (mock) The "Working now" strip (variant C) uses the session's longest completed turn as expected time when no ETA was reported.
+- (mock) In the VS Code window title (variant B), stale wins over progress and uses a new ◌ glyph; which session to show when one window has several working sessions is undecided.
+- (mock) The skill drives a CLI `aydy-progress --eta/--step/--doing`; the `--doing` phrase is not drawn on any surface yet.
+- (mock) Variant A breaks the one-line-row rule in menubar-ux.md for working rows.
+
+## Proposal
+
+Issue: AYDY can't tell a busy session from a stuck one, and gives no sense of how much work is left.
+Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); an AYDY-installed skill + `aydy-progress` CLI lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are the mock variants the owner picks.
+Skips: none (spec and critic both run — new concept, multiple modules, writes into ~/.claude).
