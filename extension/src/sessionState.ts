@@ -182,7 +182,7 @@ export const tabTitle = (glance: WindowGlance, label: string): string => {
   }
   const { signal } = glance
   if (signal !== null) {
-    return `${signal.stale ? '◌' : '◐'} ${signal.text} ${label}`
+    return `${signal.stale ? '◌' : '◐'} ${label} [${signal.text}]`
   }
   return glance.working ? `◐ ${label}` : `○ ${label}`
 }

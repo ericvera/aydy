@@ -214,12 +214,21 @@ it.each([
 })
 
 it.each([
-  [{ stale: false, text: '4/7 · ~6m' }, 0, '◐ 4/7 · ~6m label'],
-  [{ stale: true, text: 'quiet 9m' }, 0, '◌ quiet 9m label'],
+  [{ stale: false, text: '4/7 · ~6m' }, 0, '◐ label [4/7 · ~6m]'],
+  [{ stale: true, text: 'quiet 9m' }, 0, '◌ label [quiet 9m]'],
   [{ stale: true, text: 'quiet 9m' }, 1, '● label'],
   [{ stale: false, text: '4/7 · ~6m' }, 2, '● 2 label'],
 ])('tabTitle: signal %j with %i unread', (signal, unread, title) => {
   expect(tabTitle({ unread, working: true, signal }, 'label')).toBe(title)
+})
+
+it.each([
+  [{ stale: false, text: '3m' }, '◐ okven · feat/x [3m]'],
+  [{ stale: false, text: '4/7 · 2m over' }, '◐ okven · feat/x [4/7 · 2m over]'],
+])('tabTitle: signal %j after a branch label', (signal, title) => {
+  expect(tabTitle({ unread: 0, working: true, signal }, 'okven · feat/x')).toBe(
+    title,
+  )
 })
 
 it('windowGlance is working only while a prompt runs', () => {

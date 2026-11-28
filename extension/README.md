@@ -95,13 +95,14 @@ window's sessions that finished or asked for something since you last had the wi
 focused. When none need you, the title shows `◐ okven` while a prompt is running in one
 of them, or while its subagents are still running after it stopped, and `○ okven` otherwise.
 
-While a session is working, the title also says how it is going, right after the glyph:
+While a session is working, the title also says how it is going, at the end of the title
+in square brackets:
 
-- `◐ 4/7 · ~6m okven · feat/x` — the session reported step 4 of 7 and about 6 minutes
-  left; `◐ ~6m okven · feat/x` when it reported an ETA without a step, and `3m over` once
-  the ETA has passed. A report counts only if it was written during the current turn.
-- `◐ 3m okven · feat/x` — no report, so the time the current turn has been running.
-- `◌ quiet 9m okven · feat/x` — stale: neither the session's transcript nor any of its
+- `◐ okven · feat/x [4/7 · ~6m]` — the session reported step 4 of 7 and about 6 minutes
+  left; `◐ okven · feat/x [~6m]` when it reported an ETA without a step, and `[3m over]`
+  once the ETA has passed. A report counts only if it was written during the current turn.
+- `◐ okven · feat/x [3m]` — no report, so the time the current turn has been running.
+- `◌ okven · feat/x [quiet 9m]` — stale: neither the session's transcript nor any of its
   subagents' transcripts has been written for 5 minutes or more, so it may be stuck.
 - `◐ okven · feat/x` — nothing to say yet.
 
