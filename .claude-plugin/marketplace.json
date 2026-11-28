@@ -1,0 +1,14 @@
+{
+  "name": "aydy",
+  "owner": {
+    "name": "AYDY"
+  },
+  "description": "Claude Code plugins for the AYDY menu bar app.",
+  "plugins": [
+    {
+      "name": "aydy",
+      "source": "./plugin",
+      "description": "Lets Claude Code sessions report how much work is left to the AYDY menu bar app."
+    }
+  ]
+}

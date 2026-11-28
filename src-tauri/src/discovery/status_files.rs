@@ -1,6 +1,7 @@
 //! The per-session files under AYDY's data directory: the status files the
-//! hook script writes, holding each session's latest raw hook payload, and the
-//! seen files recording when a session was last looked at.
+//! hook script writes, holding each session's latest raw hook payload, the
+//! progress files the agent writes with its ETA, and the seen files recording
+//! when a session was last looked at.
 //!
 //! Every file here is written by another process, so a file that cannot be
 //! read or parsed is skipped rather than reported, and a missing directory
@@ -10,16 +11,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::atomic_file::write_atomically;
 use crate::session::event::HookEvent;
 use crate::session::hook_payload::HookPayload;
+use crate::session::signals::Step;
 
 const JSON_EXTENSION: &str = "json";
 const MAX_SESSION_ID_LEN: usize = 128;
+const MAX_ETA: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// AYDY's data directory and the locations inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +43,10 @@ impl DataDir {
         self.root.join("seen")
     }
 
+    pub fn progress_dir(&self) -> PathBuf {
+        self.root.join("progress")
+    }
+
     pub fn jump_dir(&self) -> PathBuf {
         self.root.join("jump")
     }
@@ -54,6 +61,28 @@ impl DataDir {
 pub struct StatusRecord {
     pub event: HookEvent,
     pub written_at_ms: u64,
+}
+
+/// A session's latest progress report and when the agent wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgressRecord {
+    pub session_id: String,
+    pub eta: Duration,
+    pub step: Option<Step>,
+    pub written_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgressFile {
+    eta_seconds: u64,
+    step: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StepFile {
+    done: u32,
+    total: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -81,6 +110,35 @@ pub fn read_statuses(dir: &Path) -> Vec<StatusRecord> {
 
             Some(StatusRecord {
                 event,
+                written_at_ms,
+            })
+        })
+        .collect()
+}
+
+/// Reads every progress file in `dir`.
+///
+/// A malformed step costs the report its step only; the ETA still stands.
+pub fn read_progress(dir: &Path) -> Vec<ProgressRecord> {
+    json_files(dir)
+        .filter(|(stem, _)| is_valid_session_id(stem))
+        .filter_map(|(session_id, path)| {
+            let written_at_ms = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(epoch_ms)?;
+            let progress = fs::read_to_string(&path)
+                .ok()
+                .and_then(|contents| serde_json::from_str::<ProgressFile>(&contents).ok())?;
+            let step = progress
+                .step
+                .and_then(|step| serde_json::from_value::<StepFile>(step).ok())
+                .and_then(|step| Step::new(step.done, step.total));
+
+            Some(ProgressRecord {
+                session_id,
+                eta: Duration::from_secs(progress.eta_seconds).min(MAX_ETA),
+                step,
                 written_at_ms,
             })
         })
@@ -301,7 +359,95 @@ mod tests {
 
         assert_eq!(data.status_dir(), PathBuf::from("/data/status"));
         assert_eq!(data.seen_dir(), PathBuf::from("/data/seen"));
+        assert_eq!(data.progress_dir(), PathBuf::from("/data/progress"));
         assert_eq!(data.jump_dir(), PathBuf::from("/data/jump"));
         assert_eq!(data.hook_script(), PathBuf::from("/data/bin/aydy-hook.sh"));
+    }
+
+    fn progress_by_session(dir: &Path) -> HashMap<String, ProgressRecord> {
+        read_progress(dir)
+            .into_iter()
+            .map(|record| (record.session_id.clone(), record))
+            .collect()
+    }
+
+    #[test]
+    fn a_progress_file_reads_its_eta_and_step_with_the_time_it_was_written() {
+        let dir = scratch_dir("progress-read");
+        write_status(
+            &dir,
+            "a.json",
+            r#"{"etaSeconds":360,"step":{"done":4,"total":7}}"#,
+            1_785_526_308_001,
+        );
+        write_status(&dir, "b.json", r#"{"etaSeconds":0}"#, 1_785_526_308_002);
+
+        let records = progress_by_session(&dir);
+
+        assert_eq!(
+            records["a"],
+            ProgressRecord {
+                session_id: "a".to_string(),
+                eta: Duration::from_secs(360),
+                step: Step::new(4, 7),
+                written_at_ms: 1_785_526_308_001,
+            }
+        );
+        assert_eq!(records["b"].eta, Duration::ZERO);
+        assert_eq!(records["b"].step, None);
+        assert_eq!(records["b"].written_at_ms, 1_785_526_308_002);
+    }
+
+    #[test]
+    fn an_invalid_step_is_dropped_but_the_report_kept() {
+        let dir = scratch_dir("progress-bad-step");
+        let cases = [
+            ("over", r#"{"etaSeconds":60,"step":{"done":5,"total":4}}"#),
+            ("zero", r#"{"etaSeconds":60,"step":{"done":0,"total":0}}"#),
+            (
+                "negative",
+                r#"{"etaSeconds":60,"step":{"done":-1,"total":4}}"#,
+            ),
+            ("shape", r#"{"etaSeconds":60,"step":"halfway"}"#),
+        ];
+        for (id, body) in cases {
+            write_status(&dir, &format!("{id}.json"), body, 1);
+        }
+
+        let records = progress_by_session(&dir);
+
+        assert_eq!(records.len(), cases.len());
+        for (id, _) in cases {
+            assert_eq!(records[id].eta, Duration::from_secs(60));
+            assert_eq!(records[id].step, None);
+        }
+    }
+
+    #[test]
+    fn a_progress_file_without_a_usable_eta_or_session_id_is_skipped() {
+        let dir = scratch_dir("progress-skipped");
+        write_status(&dir, "missing.json", r#"{"step":{"done":1,"total":2}}"#, 1);
+        write_status(&dir, "negative.json", r#"{"etaSeconds":-5}"#, 1);
+        write_status(&dir, "fraction.json", r#"{"etaSeconds":1.5}"#, 1);
+        write_status(&dir, "broken.json", "{not json", 1);
+        write_status(&dir, "a.b.json", r#"{"etaSeconds":5}"#, 1);
+        write_status(&dir, "kept.json", r#"{"etaSeconds":5}"#, 1);
+
+        let records = progress_by_session(&dir);
+
+        assert_eq!(records.keys().collect::<Vec<_>>(), ["kept"]);
+    }
+
+    #[test]
+    fn an_eta_above_a_day_is_capped() {
+        let dir = scratch_dir("progress-cap");
+        write_status(
+            &dir,
+            "a.json",
+            &format!(r#"{{"etaSeconds":{}}}"#, u64::MAX),
+            1,
+        );
+
+        assert_eq!(progress_by_session(&dir)["a"].eta, MAX_ETA);
     }
 }

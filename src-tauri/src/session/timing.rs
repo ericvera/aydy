@@ -68,6 +68,11 @@ impl SessionTiming {
     pub fn longest_turn(&self) -> Duration {
         self.longest_turn
     }
+
+    /// When the open turn started, or `None` outside a turn.
+    pub fn turn_started_at(&self) -> Option<Instant> {
+        self.turn_started_at
+    }
 }
 
 #[cfg(test)]

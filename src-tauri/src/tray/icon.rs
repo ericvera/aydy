@@ -10,7 +10,7 @@ use crate::session::status::SessionStatus;
 ///
 /// The icons are macOS template images: black plus alpha, tinted by the system
 /// for whichever menu bar they land in. Colour therefore carries nothing, and
-/// the four states are told apart by shape alone.
+/// the five states are told apart by shape alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IconState {
     /// At least one unread session is waiting on the user.
@@ -18,6 +18,9 @@ pub enum IconState {
     /// At least one unread session in any other status — the state the app is
     /// named after.
     SomethingNew,
+    /// A working session has gone quiet. Ranks below anything unread because a
+    /// stuck session matters less than one already waiting on you.
+    Stale,
     /// Something is running, and nothing is waiting to be looked at.
     Working,
     /// Nothing needs the user's attention.
@@ -30,6 +33,7 @@ impl IconState {
         match self {
             Self::NeedsInput => include_bytes!("../../icons/tray/needs-input.png"),
             Self::SomethingNew => include_bytes!("../../icons/tray/something-new.png"),
+            Self::Stale => include_bytes!("../../icons/tray/stale.png"),
             Self::Working => include_bytes!("../../icons/tray/working.png"),
             Self::Quiet => include_bytes!("../../icons/tray/quiet.png"),
         }
@@ -47,9 +51,9 @@ pub struct IconIndication {
 /// The most urgent state present, with its count.
 ///
 /// Precedence: an unread session that needs input, then an unread session in
-/// any other status, then a working session, then nothing. A session that has
-/// been read never raises the icon above the working state, which is what makes
-/// the icon drop once the user has looked.
+/// any other status, then a stale session, then a working session, then
+/// nothing. A session that has been read never raises the icon above the stale
+/// state, which is what makes the icon drop once the user has looked.
 pub fn indication(snapshot: &RegistrySnapshot) -> IconIndication {
     if snapshot.unread_count > 0 {
         let waiting = sessions(snapshot)
@@ -62,6 +66,17 @@ pub fn indication(snapshot: &RegistrySnapshot) -> IconIndication {
                 IconState::SomethingNew
             },
             count: Some(snapshot.unread_count),
+        };
+    }
+
+    let stale = sessions(snapshot)
+        .filter(|session| session.signals.is_some_and(|signals| signals.stale))
+        .count();
+
+    if stale > 0 {
+        return IconIndication {
+            state: IconState::Stale,
+            count: Some(stale),
         };
     }
 
@@ -95,6 +110,7 @@ mod tests {
 
     use super::*;
     use crate::session::registry::{SessionGroup, SessionGroupKind};
+    use crate::session::signals::WorkSignals;
 
     /// A session in the given status, read or unread.
     fn session(id: &str, status: SessionStatus, unread: bool) -> SessionSnapshot {
@@ -109,6 +125,22 @@ mod tests {
             working_time: Duration::ZERO,
             longest_turn: Duration::ZERO,
             notification_message: None,
+            signals: None,
+        }
+    }
+
+    /// A read working session whose signals mark it stale.
+    fn stale_session(id: &str) -> SessionSnapshot {
+        SessionSnapshot {
+            signals: Some(WorkSignals {
+                stale: true,
+                quiet_for: Some(Duration::from_secs(360)),
+                turn_elapsed: Some(Duration::from_secs(600)),
+                step: None,
+                eta: None,
+                fraction_permille: None,
+            }),
+            ..session(id, SessionStatus::Working, false)
         }
     }
 
@@ -248,6 +280,55 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_working_session_shows_stale_counting_stale_sessions_only() {
+        let sessions = vec![
+            stale_session("a"),
+            session("b", SessionStatus::Working, false),
+            session("c", SessionStatus::Working, false),
+        ];
+
+        let indication = indication(&snapshot(sessions));
+
+        assert_eq!(indication.state, IconState::Stale);
+        assert_eq!(indication.count, Some(1));
+    }
+
+    #[test]
+    fn any_unread_session_outranks_a_stale_one() {
+        let done = indication(&snapshot(vec![
+            stale_session("a"),
+            session("b", SessionStatus::Done, true),
+        ]));
+        let waiting = indication(&snapshot(vec![
+            stale_session("a"),
+            session("b", SessionStatus::NeedsInput, true),
+        ]));
+
+        assert_eq!(done.state, IconState::SomethingNew);
+        assert_eq!(waiting.state, IconState::NeedsInput);
+    }
+
+    #[test]
+    fn a_working_session_that_is_not_stale_still_shows_working() {
+        let fresh = SessionSnapshot {
+            signals: Some(WorkSignals {
+                stale: false,
+                quiet_for: Some(Duration::from_secs(10)),
+                turn_elapsed: Some(Duration::from_secs(60)),
+                step: None,
+                eta: None,
+                fraction_permille: None,
+            }),
+            ..session("a", SessionStatus::Working, false)
+        };
+
+        let indication = indication(&snapshot(vec![fresh]));
+
+        assert_eq!(indication.state, IconState::Working);
+        assert_eq!(indication.count, Some(1));
+    }
+
+    #[test]
     fn sessions_are_counted_across_every_group() {
         let snapshot = RegistrySnapshot {
             session_count: 2,
@@ -306,6 +387,7 @@ mod tests {
         let states = [
             IconState::NeedsInput,
             IconState::SomethingNew,
+            IconState::Stale,
             IconState::Working,
             IconState::Quiet,
         ];
@@ -328,7 +410,7 @@ mod tests {
         }
     }
 
-    /// The four states carry four distinct images, so a pair of them swapped
+    /// The five states carry five distinct images, so a pair of them swapped
     /// stays green everywhere except here — and a swap of needs-input and
     /// working would show "still running" while a session is blocked on the
     /// user, which is the one mistake the icon must never make. Each arm is
@@ -339,6 +421,7 @@ mod tests {
         let named = [
             (IconState::NeedsInput, "needs-input.png"),
             (IconState::SomethingNew, "something-new.png"),
+            (IconState::Stale, "stale.png"),
             (IconState::Working, "working.png"),
             (IconState::Quiet, "quiet.png"),
         ];

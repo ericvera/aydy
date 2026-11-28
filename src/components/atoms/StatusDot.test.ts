@@ -45,3 +45,18 @@ it('gives every status a colour of its own', () => {
   expect(new Set(colors).size).toBe(statuses.length)
   expect(colors).not.toContain(undefined)
 })
+
+/**
+ * A stale session is still Working, so it keeps the working hue; only the
+ * fill goes, leaving a ring.
+ */
+it('is a hollow blue ring while a working session is stale', () => {
+  const html = mount(StatusDot, {
+    props: { status: 'working', stale: true },
+  }).html()
+
+  expect(html).toMatchInlineSnapshot(
+    `"<span class="h-3 w-3 shrink-0 rounded-full box-border border border-status-working"></span>"`,
+  )
+  expect(html).not.toContain('bg-status-working')
+})

@@ -268,6 +268,9 @@ const emit = defineEmits<{ select: [id: string] }>()
   custom rules above first — the strictness applies to theme tokens, not to
   structural CSS. Standard utilities like `relative`, `overflow-hidden`,
   `flex`, `truncate`, `whitespace-nowrap` all exist.
+- A value known only at runtime — the progress bar's fill width — is the one
+  place a bound inline `style` is used, because no utility can express it;
+  everything static stays a utility.
 - Comments go above the code they describe, never inline, and wrap at 80
   characters.
 

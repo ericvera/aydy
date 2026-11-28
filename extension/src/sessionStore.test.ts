@@ -9,16 +9,18 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 
 import {
   isAlive,
   pruneStale,
   readLiveSessions,
+  readProgress,
   readSeen,
   readStatuses,
   resolveCwd,
+  transcriptActivity,
   writeSeen,
 } from './sessionStore'
 
@@ -26,7 +28,7 @@ const DEAD_PID = 2_147_483_647
 const DAY_MS = 24 * 60 * 60 * 1000
 
 let root: string
-let dirs: { status: string; seen: string; sessions: string }
+let dirs: { status: string; seen: string; sessions: string; progress: string }
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'aydy-store-'))
@@ -34,6 +36,7 @@ beforeEach(() => {
     status: join(root, 'status'),
     seen: join(root, 'seen'),
     sessions: join(root, 'sessions'),
+    progress: join(root, 'progress'),
   }
 })
 
@@ -53,6 +56,12 @@ const writeStatus = (id: string, event: string, mtimeMs?: number): void => {
   }
 }
 
+const writeAt = (path: string, body: string, mtimeMs: number): void => {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, body)
+  utimesSync(path, mtimeMs / 1000, mtimeMs / 1000)
+}
+
 const writeSession = (name: string, body: unknown): void => {
   mkdirSync(dirs.sessions, { recursive: true })
   writeFileSync(join(dirs.sessions, name), JSON.stringify(body))
@@ -68,6 +77,7 @@ it('status and seen files: round-trips statuses and seen times', async () => {
       sessionId: 's1',
       event: 'Stop',
       cwd: '/a',
+      transcriptPath: null,
       eventAt: 1_700_000_000_000,
       subagentsRunning: false,
       informational: false,
@@ -164,6 +174,84 @@ it('resolveCwd: returns a missing path unchanged and keeps null', async () => {
   expect(await resolveCwd(null)).toBeNull()
 })
 
+it('readProgress: reads valid reports and skips invalid files', async () => {
+  const at = 1_700_000_000_000
+  const write = (name: string, body: string): void => {
+    writeAt(join(dirs.progress, name), body, at)
+  }
+  write('a.json', '{"etaSeconds":360,"step":{"done":4,"total":7}}')
+  write('b.json', '{"etaSeconds":60,"step":{"done":5,"total":4}}')
+  write('missing.json', '{"step":{"done":1,"total":2}}')
+  write('negative.json', '{"etaSeconds":-5}')
+  write('fraction.json', '{"etaSeconds":1.5}')
+  write('bad.json', '{not json')
+  write('a.b.json', '{"etaSeconds":5}')
+  write('notes.txt', '{"etaSeconds":5}')
+
+  expect(await readProgress(dirs)).toEqual(
+    new Map([
+      ['a', { etaMs: 360_000, step: { done: 4, total: 7 }, reportedAt: at }],
+      ['b', { etaMs: 60_000, step: null, reportedAt: at }],
+    ]),
+  )
+})
+
+it('readProgress: a missing directory has no reports', async () => {
+  expect(await readProgress(dirs)).toEqual(new Map())
+})
+
+const activityTranscript = (): { path: string; main: number } => {
+  const main = 1_700_000_000_000
+  const path = join(root, 'project', 's-1.jsonl')
+  writeAt(path, '', main)
+  return { path, main }
+}
+
+const subagentFile = (
+  transcript: string,
+  relative: string,
+  mtimeMs: number,
+): void => {
+  writeAt(join(dirname(transcript), 's-1', 'subagents', relative), '', mtimeMs)
+}
+
+it('transcriptActivity: is the transcript mtime without subagents', async () => {
+  const { path, main } = activityTranscript()
+  expect(await transcriptActivity(path, 's-1')).toBe(main)
+})
+
+it.each(['agent-x.jsonl', 'workflows/wf_1/agent-y.jsonl'])(
+  'transcriptActivity: a newer %s is the activity',
+  async (relative) => {
+    const { path, main } = activityTranscript()
+    subagentFile(path, relative, main + 10_000)
+    expect(await transcriptActivity(path, 's-1')).toBe(main + 10_000)
+  },
+)
+
+it('transcriptActivity: picks the newest of nested subagent transcripts', async () => {
+  const { path, main } = activityTranscript()
+  subagentFile(path, 'agent-x.jsonl', main + 5_000)
+  subagentFile(path, 'workflows/wf_1/agent-y.jsonl', main + 9_000)
+  expect(await transcriptActivity(path, 's-1')).toBe(main + 9_000)
+})
+
+it.each([
+  ['an older subagent transcript', 'agent-x.jsonl', -500_000],
+  ['a newer file that is not a transcript', 'agent-x.meta.json', 10_000],
+  ['a transcript four parts deep', 'a/b/c/agent-z.jsonl', 10_000],
+])('transcriptActivity: ignores %s', async (_label, relative, offset) => {
+  const { path, main } = activityTranscript()
+  subagentFile(path, relative, main + offset)
+  expect(await transcriptActivity(path, 's-1')).toBe(main)
+})
+
+it('transcriptActivity: a missing transcript has no activity', async () => {
+  expect(
+    await transcriptActivity(join(root, 'project', 's-1.jsonl'), 's-1'),
+  ).toBeNull()
+})
+
 const now = Date.now()
 
 const seed = (): void => {
@@ -179,6 +267,11 @@ const seed = (): void => {
     const path = join(dirs.seen, `${id}.json`)
     writeFileSync(path, '{"seenAt":1}')
     utimesSync(path, (now - age * DAY_MS) / 1000, (now - age * DAY_MS) / 1000)
+    writeAt(
+      join(dirs.progress, `${id}.json`),
+      '{"etaSeconds":60}',
+      now - age * DAY_MS,
+    )
   }
 }
 
@@ -194,6 +287,10 @@ it('pruneStale: removes only old files of sessions that are not live', async () 
     'newDead.json',
     'oldLive.json',
   ])
+  expect(readdirSync(dirs.progress).sort()).toEqual([
+    'newDead.json',
+    'oldLive.json',
+  ])
 })
 
 it('pruneStale: does nothing when liveness is unknown', async () => {
@@ -202,4 +299,5 @@ it('pruneStale: does nothing when liveness is unknown', async () => {
 
   expect(readdirSync(dirs.status)).toHaveLength(3)
   expect(readdirSync(dirs.seen)).toHaveLength(3)
+  expect(readdirSync(dirs.progress)).toHaveLength(3)
 })

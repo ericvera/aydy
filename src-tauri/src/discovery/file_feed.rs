@@ -1,4 +1,5 @@
-//! Feeding the registry from the status and seen files, every half second.
+//! Feeding the registry from the status, progress and seen files, every half
+//! second.
 //!
 //! A status file is only believed while its session's Claude process is alive,
 //! checked against the same sessions directory and process table the
@@ -13,12 +14,14 @@ use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
 
 use crate::discovery::session_files::{read_all, ProcessTable};
-use crate::discovery::status_files::{read_seen, read_statuses, DataDir, StatusRecord};
+use crate::discovery::status_files::{
+    read_progress, read_seen, read_statuses, DataDir, ProgressRecord, StatusRecord,
+};
 use crate::session::event::{HookEvent, HookEventKind};
 use crate::session::registry::SessionRegistry;
 use crate::sync::lock_recovering;
 
-/// How often the status and seen files are read.
+/// How often the status, progress and seen files are read.
 pub const FEED_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How long the set of live sessions is trusted before it is read again.
@@ -31,6 +34,7 @@ pub struct FeedChanges {
     /// Sessions applied before whose status file has since vanished.
     pub ended: Vec<String>,
     pub seen: HashMap<String, u64>,
+    pub progress: Vec<ProgressRecord>,
 }
 
 /// The state carried from one pass over the files to the next.
@@ -42,6 +46,8 @@ pub struct FileFeed {
     applied: HashMap<String, u64>,
     /// The mtime of the attention record each session has waiting one pass.
     held: HashMap<String, u64>,
+    /// The mtime of the progress file last forwarded for each session.
+    progress_applied: HashMap<String, u64>,
     first_pass: bool,
     live: HashSet<String>,
     live_read_at: Option<Instant>,
@@ -62,6 +68,7 @@ impl FileFeed {
             processes,
             applied: HashMap::new(),
             held: HashMap::new(),
+            progress_applied: HashMap::new(),
             first_pass: true,
             live: HashSet::new(),
             live_read_at: None,
@@ -131,9 +138,51 @@ impl FileFeed {
             .filter(|(session_id, _)| present.contains(session_id))
             .collect();
 
+        let progress = self.new_progress();
+
         self.first_pass = false;
 
-        FeedChanges { apply, ended, seen }
+        FeedChanges {
+            apply,
+            ended,
+            seen,
+            progress,
+        }
+    }
+
+    /// The live sessions' progress files not forwarded since they last changed.
+    /// Progress asks for no attention, so nothing is held.
+    fn new_progress(&mut self) -> Vec<ProgressRecord> {
+        let records = read_progress(&self.data.progress_dir());
+        let present: HashSet<&str> = records
+            .iter()
+            .map(|record| record.session_id.as_str())
+            .collect();
+        self.progress_applied
+            .retain(|session_id, _| present.contains(session_id.as_str()));
+
+        let mut progress = Vec::new();
+        for record in records {
+            if !self.is_live(&record.session_id)
+                || self.progress_applied.get(&record.session_id) == Some(&record.written_at_ms)
+            {
+                continue;
+            }
+
+            self.progress_applied
+                .insert(record.session_id.clone(), record.written_at_ms);
+            progress.push(record);
+        }
+
+        progress
+    }
+
+    /// Forgets that these sessions' progress was forwarded, so the next pass
+    /// forwards the same files again.
+    pub fn forget_progress(&mut self, session_ids: &[String]) {
+        for session_id in session_ids {
+            self.progress_applied.remove(session_id);
+        }
     }
 
     fn is_live(&self, session_id: &str) -> bool {
@@ -170,14 +219,30 @@ impl FileFeed {
 }
 
 /// Applies one pass's changes under a single lock: the records as of when they
-/// were recorded, then the sessions whose files vanished, then the seen times,
-/// so a snapshot never holds a new attention event without the seen time read
-/// alongside it.
-pub fn apply_changes(registry: &Mutex<SessionRegistry>, changes: FeedChanges, now_ms: u64) {
+/// were recorded, then the progress reports, then the sessions whose files
+/// vanished, then the seen times, so a snapshot never holds a new attention
+/// event without the seen time read alongside it.
+///
+/// Progress follows the status records so a turn opened in this pass can
+/// reject a report written before it. Returns the sessions whose progress found
+/// no session to land on.
+pub fn apply_changes(
+    registry: &Mutex<SessionRegistry>,
+    changes: FeedChanges,
+    now_ms: u64,
+) -> Vec<String> {
     let mut registry = lock_recovering(registry);
 
     for record in changes.apply {
         registry.apply_status(record, now_ms);
+    }
+
+    let mut unapplied = Vec::new();
+    for record in changes.progress {
+        let session_id = record.session_id.clone();
+        if !registry.apply_progress(record, now_ms) {
+            unapplied.push(session_id);
+        }
     }
 
     for session_id in changes.ended {
@@ -187,6 +252,8 @@ pub fn apply_changes(registry: &Mutex<SessionRegistry>, changes: FeedChanges, no
     for (session_id, seen_at_ms) in changes.seen {
         registry.apply_seen(&session_id, seen_at_ms);
     }
+
+    unapplied
 }
 
 /// Feeds the registry every [`FEED_INTERVAL`] until `shutdown` fires, calling
@@ -221,7 +288,10 @@ async fn run_every(
 
             move || {
                 let changes = lock_recovering(&feed).pass(Instant::now());
-                apply_changes(&registry, changes, epoch_now_ms());
+                let unapplied = apply_changes(&registry, changes, epoch_now_ms());
+                if !unapplied.is_empty() {
+                    lock_recovering(&feed).forget_progress(&unapplied);
+                }
             }
         });
 
@@ -289,6 +359,7 @@ mod tests {
     use crate::notify::sound::test_support::RecordingPlayer;
     use crate::notify::sound::{Sound, SoundNotifier, SoundPlayer};
     use crate::session::registry::{RegistrySnapshot, SessionSnapshot};
+    use crate::session::signals::{Step, WorkSignals};
     use crate::settings::store::Settings;
 
     const BASE_MS: u64 = 1_785_526_308_000;
@@ -354,6 +425,14 @@ mod tests {
                 .expect("the seen file to be writable");
         }
 
+        fn progress(&self, session_id: &str, body: &str, written_at_ms: u64) {
+            let dir = self.data.progress_dir();
+            fs::create_dir_all(&dir).expect("the progress directory to be creatable");
+            let path = dir.join(format!("{session_id}.json"));
+            fs::write(&path, body).expect("the progress file to be writable");
+            set_mtime(&path, written_at_ms);
+        }
+
         fn remove_status(&self, session_id: &str) {
             fs::remove_file(self.data.status_dir().join(format!("{session_id}.json")))
                 .expect("the status file to be removable");
@@ -367,11 +446,34 @@ mod tests {
             format!(r#"{{"session_id":"{session_id}","hook_event_name":"{event}"}}"#),
         )
         .expect("the status file to be writable");
+        set_mtime(&path, written_at_ms);
+    }
+
+    fn set_mtime(path: &Path, written_at_ms: u64) {
         File::options()
             .write(true)
-            .open(&path)
+            .open(path)
             .and_then(|file| file.set_modified(UNIX_EPOCH + Duration::from_millis(written_at_ms)))
             .expect("the mtime to be settable");
+    }
+
+    fn progress_ids(changes: &FeedChanges) -> Vec<&str> {
+        changes
+            .progress
+            .iter()
+            .map(|record| record.session_id.as_str())
+            .collect()
+    }
+
+    fn signals(registry: &Mutex<SessionRegistry>, session_id: &str) -> WorkSignals {
+        let snapshot = lock_recovering(registry).snapshot();
+
+        rows(&snapshot)
+            .iter()
+            .find(|row| row.id == session_id)
+            .expect("the session to be listed")
+            .signals
+            .expect("a Working session to carry signals")
     }
 
     fn applied_ids(changes: &FeedChanges) -> Vec<&str> {
@@ -582,6 +684,90 @@ mod tests {
         fixture.status("a", "Stop", BASE_MS);
 
         assert_eq!(applied_ids(&feed.pass(Instant::now())), ["a"]);
+    }
+
+    const PROGRESS: &str = r#"{"etaSeconds":360,"step":{"done":4,"total":7}}"#;
+
+    #[test]
+    fn a_live_sessions_progress_is_forwarded_once_and_again_only_after_it_changes() {
+        let fixture = Fixture::new("feed-progress-once", &[(11, "a")]);
+        let mut feed = fixture.live([11]);
+        let now = Instant::now();
+        fixture.progress("a", PROGRESS, BASE_MS);
+
+        assert_eq!(progress_ids(&feed.pass(now)), ["a"]);
+        assert!(feed.pass(now).progress.is_empty());
+
+        fixture.progress("a", PROGRESS, BASE_MS + 1);
+
+        assert_eq!(progress_ids(&feed.pass(now)), ["a"]);
+        assert!(feed.pass(now).progress.is_empty());
+    }
+
+    #[test]
+    fn a_dead_sessions_progress_is_not_forwarded() {
+        let fixture = Fixture::new("feed-progress-dead", &[(11, "a")]);
+        let mut feed = fixture.live([]);
+        fixture.progress("a", PROGRESS, BASE_MS);
+
+        assert!(feed.pass(Instant::now()).progress.is_empty());
+    }
+
+    #[test]
+    fn applied_progress_puts_the_eta_and_step_on_a_working_session() {
+        let fixture = Fixture::new("feed-progress-applied", &[(11, "a")]);
+        let mut feed = fixture.live([11]);
+        let registry = registry();
+        fixture.status("a", "UserPromptSubmit", NOW_MS - 2_000);
+        fixture.progress("a", PROGRESS, NOW_MS - 1_000);
+
+        let unapplied = apply_changes(&registry, feed.pass(Instant::now()), NOW_MS);
+
+        assert!(unapplied.is_empty());
+        let signals = signals(&registry, "a");
+        assert!(signals.eta.is_some());
+        assert_eq!(signals.step, Step::new(4, 7));
+    }
+
+    #[test]
+    fn progress_older_than_a_prompt_applied_in_the_same_pass_yields_no_eta() {
+        let fixture = Fixture::new("feed-progress-stale", &[(11, "a")]);
+        let mut feed = fixture.live([11]);
+        let registry = registry();
+        fixture.status("a", "UserPromptSubmit", NOW_MS - 1_000);
+        fixture.progress("a", PROGRESS, NOW_MS - 2_000);
+
+        apply_changes(&registry, feed.pass(Instant::now()), NOW_MS);
+
+        assert_eq!(signals(&registry, "a").eta, None);
+    }
+
+    #[test]
+    fn progress_for_a_session_not_yet_tracked_lands_once_it_is() {
+        let fixture = Fixture::new("feed-progress-retry", &[(11, "a")]);
+        let mut feed = fixture.live([11]);
+        let registry = registry();
+        let now = Instant::now();
+        fixture.progress("a", PROGRESS, NOW_MS - 1_000);
+
+        let unapplied = apply_changes(&registry, feed.pass(now), NOW_MS);
+        assert_eq!(unapplied, ["a"]);
+        assert!(lock_recovering(&registry).session("a").is_none());
+
+        feed.forget_progress(&unapplied);
+        let changes = feed.pass(now);
+        assert_eq!(progress_ids(&changes), ["a"]);
+
+        lock_recovering(&registry).apply_status(
+            StatusRecord {
+                event: HookEvent::new("a", HookEventKind::UserPromptSubmit),
+                written_at_ms: NOW_MS - 2_000,
+            },
+            NOW_MS,
+        );
+        assert!(apply_changes(&registry, changes, NOW_MS).is_empty());
+        assert!(signals(&registry, "a").eta.is_some());
+        assert!(feed.pass(now).progress.is_empty());
     }
 
     fn armed_sounds() -> (SoundNotifier, Arc<RecordingPlayer>) {

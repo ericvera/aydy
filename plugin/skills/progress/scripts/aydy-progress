@@ -1,0 +1,142 @@
+#!/bin/sh
+# AYDY progress command v1
+LC_ALL=C
+export LC_ALL
+
+usage() {
+  printf '%s\n' \
+    'usage: aydy-progress --eta <duration> [--step <done>/<total>]' \
+    '  --eta   time until this turn is done: 30s, 6m, 1h 10m, 1h10m (at most 24h)' \
+    '  --step  optional. Steps done / total, such as 4/7'
+}
+
+usage_error() {
+  [ -n "$1" ] && printf 'aydy-progress: %s\n' "$1" >&2
+  usage >&2
+  exit 2
+}
+
+fail() {
+  printf 'aydy-progress: %s\n' "$1" >&2
+  exit "$2"
+}
+
+eta=
+eta_set=
+step=
+step_set=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -h|--help) usage; exit 0 ;;
+    --eta|--step)
+      [ $# -ge 2 ] || usage_error "$1 needs a value"
+      flag=${1#--}
+      value=$2
+      shift 2
+      ;;
+    --eta=*|--step=*)
+      flag=${1%%=*}
+      flag=${flag#--}
+      value=${1#*=}
+      shift
+      ;;
+    *) usage_error "unknown argument: $1" ;;
+  esac
+  if [ "$flag" = eta ]; then
+    [ -z "$eta_set" ] || usage_error '--eta given more than once'
+    eta=$value
+    eta_set=1
+  else
+    [ -z "$step_set" ] || usage_error '--step given more than once'
+    step=$value
+    step_set=1
+  fi
+done
+[ -n "$eta_set" ] || usage_error '--eta is required'
+
+bad_eta() {
+  fail "invalid --eta '$eta': use hours, minutes and seconds in that order, such as 30s, 6m, 1h 10m or 1h10m, at most 24h" 2
+}
+
+seconds=0
+rank=0
+rest=$eta
+[ -n "$rest" ] || bad_eta
+while [ -n "$rest" ]; do
+  digits=$(expr "x$rest" : 'x\([0-9]\{1,5\}\)')
+  [ -n "$digits" ] || bad_eta
+  rest=${rest#"$digits"}
+  unit=${rest%"${rest#?}"}
+  rest=${rest#?}
+  case $unit in
+    h) next=1 factor=3600 ;;
+    m) next=2 factor=60 ;;
+    s) next=3 factor=1 ;;
+    *) bad_eta ;;
+  esac
+  [ "$next" -gt "$rank" ] || bad_eta
+  rank=$next
+  seconds=$((seconds + $(expr "$digits" + 0) * factor))
+  case $rest in
+    ' '[0-9]*) rest=${rest# } ;;
+    '') ;;
+    [0-9]*) ;;
+    *) bad_eta ;;
+  esac
+done
+[ "$seconds" -le 86400 ] || bad_eta
+
+step_json=
+step_text=
+if [ -n "$step_set" ]; then
+  bad_step() {
+    fail "invalid --step '$step': use <done>/<total>, such as 4/7, with done no more than total" 2
+  }
+  case $step in
+    */*) step_done=${step%%/*} step_total=${step#*/} ;;
+    *) bad_step ;;
+  esac
+  for part in "$step_done" "$step_total"; do
+    case $part in
+      ''|*[!0-9]*) bad_step ;;
+    esac
+    [ ${#part} -le 6 ] || bad_step
+  done
+  step_done=$(expr "$step_done" + 0)
+  step_total=$(expr "$step_total" + 0)
+  [ "$step_total" -ge 1 ] && [ "$step_done" -le "$step_total" ] || bad_step
+  step_json=",\"step\":{\"done\":$step_done,\"total\":$step_total}"
+  step_text="$step_done/$step_total · "
+fi
+
+id=$CLAUDE_CODE_SESSION_ID
+case $id in
+  ''|*[!A-Za-z0-9_-]*) id= ;;
+esac
+[ -n "$id" ] && [ ${#id} -le 128 ] ||
+  fail 'not running inside a Claude Code session; nothing reported' 1
+
+root="$HOME/Library/Application Support/app.aydy"
+if [ ! -d "$root" ]; then
+  printf '%s\n' 'AYDY is not installed here; nothing reported'
+  exit 0
+fi
+
+dir="$root/progress"
+[ -d "$dir" ] || mkdir "$dir" 2>/dev/null
+[ -d "$dir" ] || fail "could not create $dir" 1
+tmp="$dir/.progress.$$.tmp"
+if ! printf '{"etaSeconds":%s%s}' "$seconds" "$step_json" > "$tmp" 2>/dev/null ||
+  ! mv -f "$tmp" "$dir/$id.json" 2>/dev/null; then
+  rm -f "$tmp" 2>/dev/null
+  fail "could not write $dir/$id.json" 1
+fi
+
+if [ "$seconds" -ge 3600 ]; then
+  left="$((seconds / 3600))h $((seconds % 3600 / 60))m"
+elif [ "$seconds" -ge 60 ]; then
+  left="$((seconds / 60))m"
+else
+  left="${seconds}s"
+fi
+printf 'Reported to AYDY: %s~%s left\n' "$step_text" "$left"

@@ -23,6 +23,7 @@ use crate::notify::sound::SoundNotifier;
 use crate::session::registry::{
     RegistrySnapshot, SessionGroup, SessionGroupKind, SessionRegistry, SessionSnapshot,
 };
+use crate::session::signals::{Eta, Step, WorkSignals};
 use crate::session::status::SessionStatus;
 use crate::sync::lock_recovering;
 use crate::tray;
@@ -75,6 +76,65 @@ impl From<SessionGroupKind> for GroupKindPayload {
     }
 }
 
+/// An agent-reported step count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepPayload {
+    pub done: u32,
+    pub total: u32,
+}
+
+impl From<Step> for StepPayload {
+    fn from(step: Step) -> Self {
+        Self {
+            done: step.done,
+            total: step.total,
+        }
+    }
+}
+
+/// The agent's reported ETA as it stands now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EtaPayload {
+    pub remaining_ms: i64,
+    pub reported_ago_ms: u64,
+}
+
+impl From<Eta> for EtaPayload {
+    fn from(eta: Eta) -> Self {
+        Self {
+            remaining_ms: eta.remaining_ms,
+            reported_ago_ms: milliseconds(eta.reported_ago),
+        }
+    }
+}
+
+/// A Working session's stale and progress signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalsPayload {
+    pub stale: bool,
+    pub quiet_ms: Option<u64>,
+    pub turn_elapsed_ms: Option<u64>,
+    pub step: Option<StepPayload>,
+    pub eta: Option<EtaPayload>,
+    pub fraction_permille: Option<u16>,
+}
+
+impl From<&WorkSignals> for SignalsPayload {
+    fn from(signals: &WorkSignals) -> Self {
+        Self {
+            stale: signals.stale,
+            quiet_ms: signals.quiet_for.map(milliseconds),
+            turn_elapsed_ms: signals.turn_elapsed.map(milliseconds),
+            step: signals.step.map(StepPayload::from),
+            eta: signals.eta.map(EtaPayload::from),
+            fraction_permille: signals.fraction_permille,
+        }
+    }
+}
+
 /// One session row.
 ///
 /// Durations cross as whole milliseconds: JavaScript has no duration type, and
@@ -93,6 +153,7 @@ pub struct SessionPayload {
     pub working_time_ms: u64,
     pub longest_turn_ms: u64,
     pub notification_message: Option<String>,
+    pub signals: Option<SignalsPayload>,
 }
 
 impl From<&SessionSnapshot> for SessionPayload {
@@ -108,6 +169,7 @@ impl From<&SessionSnapshot> for SessionPayload {
             working_time_ms: milliseconds(session.working_time),
             longest_turn_ms: milliseconds(session.longest_turn),
             notification_message: session.notification_message.clone(),
+            signals: session.signals.as_ref().map(SignalsPayload::from),
         }
     }
 }
@@ -410,6 +472,7 @@ mod tests {
                 working_time: Duration::from_secs(90),
                 longest_turn: Duration::from_millis(1_500),
                 notification_message: None,
+                signals: None,
             })
             .collect();
 
@@ -485,6 +548,7 @@ mod tests {
             working_time: Duration::from_secs(90),
             longest_turn: Duration::from_millis(1_500),
             notification_message: Some("Claude needs your permission".to_string()),
+            signals: None,
         };
 
         let payload = SessionPayload::from(&session);
@@ -519,6 +583,7 @@ mod tests {
             working_time: Duration::ZERO,
             longest_turn: Duration::ZERO,
             notification_message: None,
+            signals: None,
         };
 
         let payload = SessionPayload::from(&session);
@@ -533,6 +598,45 @@ mod tests {
         assert_eq!(payload.working_time_ms, 0);
         assert_eq!(payload.longest_turn_ms, 0);
         assert_eq!(payload.notification_message, None);
+    }
+
+    #[test]
+    fn a_working_session_sends_its_signals_and_a_done_one_sends_null() {
+        let mut working = snapshot(1, 0);
+        working.groups[0].sessions[0].signals = Some(WorkSignals {
+            stale: true,
+            quiet_for: Some(Duration::from_secs(360)),
+            turn_elapsed: Some(Duration::from_millis(754_250)),
+            step: Some(Step { done: 3, total: 7 }),
+            eta: Some(Eta {
+                remaining_ms: -45_000,
+                reported_ago: Duration::from_secs(120),
+            }),
+            fraction_permille: Some(428),
+        });
+
+        let json = serde_json::to_value(SnapshotPayload::from(&working))
+            .expect("the payload to serialize");
+        let signals = &json["groups"][0]["sessions"][0]["signals"];
+
+        assert_eq!(signals["stale"], true);
+        assert_eq!(signals["quietMs"], 360_000);
+        assert_eq!(signals["turnElapsedMs"], 754_250);
+        assert_eq!(signals["step"]["done"], 3);
+        assert_eq!(signals["step"]["total"], 7);
+        assert_eq!(signals["eta"]["remainingMs"], -45_000);
+        assert_eq!(signals["eta"]["reportedAgoMs"], 120_000);
+        assert_eq!(signals["fractionPermille"], 428);
+
+        let done = serde_json::to_value(SnapshotPayload::from(&snapshot_of(
+            1,
+            0,
+            SessionStatus::Done,
+        )))
+        .expect("the payload to serialize");
+        let session = &done["groups"][0]["sessions"][0];
+
+        assert_eq!(session.get("signals"), Some(&serde_json::Value::Null));
     }
 
     #[test]

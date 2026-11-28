@@ -91,10 +91,14 @@ it('draws the whole list', () => {
   expect(list([okvenMain, notJumpable]).html()).toMatchInlineSnapshot(`
     "<div class="group/list">
       <section class="group-divider">
-        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">okven · main</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-unread min-w-0 flex-1">Review and prioritize customer requests</span></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span></button>
+        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">okven · main</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-unread min-w-0 flex-1">Review and prioritize customer requests</span></span>
+          <!--v-if--><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span>
+        </button>
       </section>
       <section class="group-divider">
-        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">Not jumpable</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-default"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-working"></span><span class="truncate text-2 title-read min-w-0 flex-1">Review yarn.lock dependencies</span></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Working</span><span>Working time 0s</span><span>Longest turn 0s</span></span></button>
+        <p class="px-5 pb-2 pt-4 text-0 font-3 uppercase text-neutral-6">Not jumpable</p><button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-default"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-working"></span><span class="truncate text-2 title-read min-w-0 flex-1">Review yarn.lock dependencies</span></span>
+          <!--v-if--><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Working</span><span>Working time 0s</span><span>Longest turn 0s</span></span>
+        </button>
       </section>
     </div>"
   `)

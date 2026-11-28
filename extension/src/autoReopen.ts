@@ -1,4 +1,4 @@
-import type { SessionStatus } from './sessionState'
+import type { SessionStatus, WindowFolders } from './sessionState'
 import { isWorking } from './sessionState'
 import type { WorkspaceDirs } from './workspaceFile'
 import {
@@ -105,4 +105,24 @@ export const reopenAsWorkspace = async (
   await registerWorkspace(path, folder, env.dirs)
   await env.openFolder(path, { forceReuseWindow: true })
   return path
+}
+
+/** The workspace file of `folder` another window already has open, if any. */
+export const workspaceOpenElsewhere = (
+  folder: string,
+  selfPid: number,
+  windows: readonly WindowFolders[],
+  dirs?: WorkspaceDirs,
+): string | null => {
+  const paths = [
+    siblingWorkspacePath(folder),
+    legacyWorkspacePath(folder, dirs),
+  ]
+  const other = windows.find(
+    ({ pid, workspace }) =>
+      pid !== selfPid &&
+      typeof workspace === 'string' &&
+      paths.includes(workspace),
+  )
+  return other?.workspace ?? null
 }

@@ -17,20 +17,27 @@ The tray icon is the whole product for most of the day: it has to answer
 The icon shows the **most urgent state present**, so one glance answers the
 question.
 
-| #   | State         | Shape                          | Count            |
-| --- | ------------- | ------------------------------ | ---------------- |
-| 1   | Needs input   | disc with an exclamation mark  | unread sessions  |
-| 2   | Something new | solid disc                     | unread sessions  |
-| 3   | Working       | ring with its left half filled | working sessions |
-| 4   | All quiet     | thin ring                      | none             |
+| #   | State         | Shape                                       | Count            |
+| --- | ------------- | ------------------------------------------- | ---------------- |
+| 1   | Needs input   | disc with an exclamation mark               | unread sessions  |
+| 2   | Something new | solid disc                                  | unread sessions  |
+| 3   | Stale         | ring drawn dashed with its left half filled | stale sessions   |
+| 4   | Working       | ring with its left half filled              | working sessions |
+| 5   | All quiet     | thin ring                                   | none             |
 
 1. **Needs input** — at least one **unread** session is waiting on the user.
 2. **Something new** — at least one **unread** session in any other status. This
    is the state the app is named after: work finished while you were away and
    you have not looked yet. It outranks working, because working is the state
    you already expect.
-3. **Working** — something is running and nothing is waiting to be looked at.
-4. **All quiet** — nothing needs attention.
+3. **Stale** — a Working session has written nothing to its transcript,
+   subagent transcripts included, for 5 minutes. Stale is a signal beside the
+   status, not a status: the session is still Working. It ranks below anything
+   unread, because a stuck session matters less than one already waiting on
+   you. While a session is stale the icon gives up the working count; the
+   popover still shows it.
+4. **Working** — something is running and nothing is waiting to be looked at.
+5. **All quiet** — nothing needs attention.
 
 **A session that has been read never raises the icon above working**, even while
 its status is still Needs input. Reading is what makes the amber state drop;
@@ -42,22 +49,24 @@ state 2.
 
 States 1 and 2 count **unread** sessions — every unread session, not only the
 waiting ones, so the number matches the popover header's `· N new`. State 3
-counts **working** sessions. State 4 carries no count at all.
+counts **stale** sessions, and state 4 counts **working** sessions. State 5
+carries no count at all.
 
 The count is the tray item's title, drawn beside the icon in the menu bar font.
 
 ### Why shape and not colour
 
-The mock draws the four states in status colours. The shipped icons cannot:
+The mock draws the states in status colours. The shipped icons cannot:
 macOS menu bar icons are **template images**, black plus alpha, tinted by the
 system to suit the menu bar they land in — which is what makes an icon legible
 in both a light and a dark menu bar, and in front of any wallpaper. Colour is
-therefore not available to carry meaning, and states 1, 2 and 3 have to be told
+therefore not available to carry meaning, and the five states have to be told
 apart by silhouette. The circle family of the mock is kept; the fill is what
 varies:
 
 - empty ring → nothing to see
 - half-filled ring → part way through
+- half-filled ring drawn dashed → working, but the line has broken up
 - solid disc → finished
 - disc with an exclamation → finished **and** blocked on you
 
@@ -125,7 +134,8 @@ Top to bottom, at 320px:
    `· N new` half appears only when something is unread, and its number is the
    same unread count the icon shows. The settings control sits on the right — a
    gear, and the only way into settings. It is on the list and nowhere else.
-2. **Body** — the grouped session list, one line per session.
+2. **Body** — the grouped session list, one line per session, plus a progress
+   line under each Working row.
 3. **Footer** — quit, and nothing else.
 
 The header count is written here because it is the popover's half of the icon's
@@ -142,9 +152,22 @@ session list and nowhere else — no other screen in the mock has a footer.
 
 ### The list
 
-- **A row is a status dot and a title, on one line.** Nothing else: no working
-  time, no longest turn, no status text, no tab identifier. Four rounds of mock
-  review took each of those off the row, and they are on hover instead.
+- **A row is a status dot and a title, on one line** — every row but a Working
+  one. Nothing else: no working time, no longest turn, no status text, no tab
+  identifier. Four rounds of mock review took each of those off the row, and
+  they are on hover instead.
+- **A Working row carries a second, always-visible progress line**: a bar and
+  `4/7 · ~6m left`, `~6m left`, `2m past ETA` or `3m elapsed`, or **Quiet 9m**
+  first when the session is stale. It breaks the one-line rule because the owner
+  wanted progress and liveness at a glance, without opening anything, and it
+  costs height only for sessions that are working.
+- **A stale session's dot is a hollow ring** in working blue. Its status stays
+  Working: stale is a signal beside status, set when nothing has been written to
+  the session's transcript, or to its subagents' transcripts, for 5 minutes.
+- **Progress comes only from the agent's own report**, made through the
+  `aydy:progress` skill. An ETA reported before the current prompt is
+  discarded. Without a report the line shows how long the turn has run. AYDY
+  does not read TodoWrite or task lists.
 - **Unread is weight and brightness** — `title-unread` against `title-read`, the
   two shortcuts in `uno.config.ts`. Never colour: an accent bar and a trailing
   coloured dot were both considered and rejected, because either makes unread
@@ -164,8 +187,11 @@ session list and nowhere else — no other screen in the mock has a footer.
 - **Hover detail** is a passive reveal on the row itself — not a popup, not a
   click target. It is a second line under the title carrying the status in
   words and both durations, each labelled, so working time is never read as
-  elapsed time. It is available on every row, including rows that cannot be
-  jumped to.
+  elapsed time. A Working row with signals adds, after the status: when stale,
+  **Quiet 9m · nothing written to the transcript**, one step brighter in
+  `neutral-6`; **This turn 12m**; and **ETA reported 1m ago**, or **No ETA
+  reported**. These parts are hover-only and add nothing to the progress line.
+  It is available on every row, including rows that cannot be jumped to.
 - **The reveal is CSS**, and never component state. The popover hides without
   unmounting its DOM and the list reorders under a still pointer, and neither
   produces the pointer event a stored flag would need to close again — a row
@@ -383,6 +409,10 @@ write, one per session with when it was last looked at. Rust reads both every
 half second and derives grouping, ordering, unread, both counts and the icon
 state from a single registry snapshot, then pushes it to the popover over a
 `tauri::ipc::Channel` at most ten times a second, and only when it has changed.
-The interface renders what it is given and derives nothing about state on its
-own — a second derivation in the frontend is how an icon and a list start to
+Working sessions' signals come from two more sources: the **progress files**
+under `progress/`, which the plugin's `aydy-progress` writes when the agent
+reports a step or an ETA, and the transcript activity — when the session's
+transcript and its subagents' transcripts were last written — read on the 25 s
+scan. The interface renders what it is given and derives nothing about state on
+its own — a second derivation in the frontend is how an icon and a list start to
 disagree.

@@ -4,6 +4,8 @@ import { mount } from '@vue/test-utils'
 import { expect, it } from 'vitest'
 
 import type { Session } from '../../types/Session'
+import StatusDot from '../atoms/StatusDot.vue'
+import SessionProgressLine from './SessionProgressLine.vue'
 import SessionRow from './SessionRow.vue'
 import SessionRowDetail from './SessionRowDetail.vue'
 
@@ -21,11 +23,15 @@ const detailText = (wrapper: VueWrapper): string =>
  * status text and any tab identifier stay off it — four rounds of mock review
  * took them out, and they are on hover instead.
  */
-it('shows a status dot and a title and nothing else', () => {
+it('shows a status dot and a title and nothing else on a row that is not working', () => {
   expect(
     row({ label: 'Fix permission denied for code command' }).html(),
   ).toMatchInlineSnapshot(
-    `"<button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-read min-w-0 flex-1">Fix permission denied for code command</span></span><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span></button>"`,
+    `
+    "<button type="button" class="group/row row-divider flex w-full flex-col gap-1 px-5 py-2 text-left cursor-pointer hover:bg-neutral-2"><span class="flex w-full items-center gap-3"><span class="h-3 w-3 shrink-0 rounded-full bg-status-done"></span><span class="truncate text-2 title-read min-w-0 flex-1">Fix permission denied for code command</span></span>
+      <!--v-if--><span class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"><span>Done</span><span>Working time 0s</span><span>Longest turn 0s</span></span>
+    </button>"
+  `,
   )
 })
 
@@ -149,4 +155,66 @@ it('draws a row that cannot be jumped to differently from one that can', () => {
  */
 it('never marks a row as the session the user is in', () => {
   expect(renderedText(row().element)).not.toContain('you are here')
+})
+
+it('shows the progress line under the title of a working row', () => {
+  const wrapper = row({
+    status: 'working',
+    signals: {
+      stale: false,
+      quietMs: null,
+      turnElapsedMs: 180_000,
+      step: null,
+      eta: null,
+      fractionPermille: null,
+    },
+  })
+
+  expect(renderedText(wrapper.getComponent(SessionProgressLine).element)).toBe(
+    '3m elapsed',
+  )
+})
+
+it('shows no progress line on a working row with no signals', () => {
+  const wrapper = row({ status: 'working', signals: null })
+
+  expect(wrapper.findComponent(SessionProgressLine).exists()).toBe(false)
+})
+
+it('draws a stale working row with a hollow dot', () => {
+  const wrapper = row({
+    status: 'working',
+    signals: {
+      stale: true,
+      quietMs: 540_000,
+      turnElapsedMs: 1_860_000,
+      step: null,
+      eta: null,
+      fractionPermille: null,
+    },
+  })
+
+  expect(wrapper.getComponent(StatusDot).props('stale')).toBe(true)
+  expect(renderedText(wrapper.getComponent(SessionProgressLine).element)).toBe(
+    'Quiet 9m 31m elapsed',
+  )
+})
+
+it("passes a working row's signals through to the detail", () => {
+  const wrapper = row({
+    status: 'working',
+    workingTimeMs: 180_000,
+    signals: {
+      stale: false,
+      quietMs: null,
+      turnElapsedMs: 180_000,
+      step: null,
+      eta: null,
+      fractionPermille: null,
+    },
+  })
+
+  expect(detailText(wrapper)).toBe(
+    'Working This turn 3m No ETA reported Working time 3m Longest turn 0s',
+  )
 })

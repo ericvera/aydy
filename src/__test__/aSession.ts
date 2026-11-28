@@ -15,5 +15,6 @@ export const aSession = (overrides: Partial<Session> = {}): Session => ({
   workingTimeMs: 0,
   longestTurnMs: 0,
   notificationMessage: null,
+  signals: null,
   ...overrides,
 })

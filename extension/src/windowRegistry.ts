@@ -37,18 +37,24 @@ const parseWindow = (text: string, pid: number): WindowFolders | null => {
   ) {
     return null
   }
-  return { pid, folders }
+  const workspace = record['workspace']
+  return {
+    pid,
+    folders,
+    workspace: typeof workspace === 'string' ? workspace : null,
+  }
 }
 
 export const publishWindow = async (
   pid: number,
   folders: string[],
+  workspace: string | null = null,
   { dir = windowsDir() }: RegistryOptions = {},
 ): Promise<void> => {
   await mkdir(dir, { recursive: true })
   await writeAtomically(
     join(dir, `${pid}.json`),
-    JSON.stringify({ pid, folders }),
+    JSON.stringify({ pid, folders, workspace }),
   )
 }
 

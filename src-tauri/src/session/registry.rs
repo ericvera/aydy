@@ -6,11 +6,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::clock::Clock;
-use crate::discovery::status_files::StatusRecord;
+use crate::discovery::status_files::{ProgressRecord, StatusRecord};
 use crate::session::event::{
     HookEvent, HookEventKind, ReconciliationResult, SessionEnrichment, SessionId,
 };
 use crate::session::session::Session;
+use crate::session::signals::{ProgressReport, WorkSignals};
 use crate::session::status::SessionStatus;
 
 /// The label a row falls back to when nothing else is known about a session.
@@ -43,6 +44,8 @@ pub struct SessionSnapshot {
     pub longest_turn: Duration,
     /// What the session is waiting on, from its most recent notification.
     pub notification_message: Option<String>,
+    /// The stale and progress signals, present only while Working.
+    pub signals: Option<WorkSignals>,
 }
 
 /// One group of sessions, already ordered.
@@ -168,9 +171,7 @@ impl SessionRegistry {
     /// notification is the exception: it asks for nothing, so it neither raises
     /// nor withdraws attention.
     pub fn apply_status(&mut self, record: StatusRecord, now_ms: u64) {
-        let now = self.clock.now();
-        let age = Duration::from_millis(now_ms.saturating_sub(record.written_at_ms));
-        let at = now.checked_sub(age).unwrap_or(now);
+        let at = self.recorded_at(record.written_at_ms, now_ms);
         let session_id = record.event.session_id.clone();
         let attention = match record.event.kind {
             HookEventKind::Stop | HookEventKind::Notification { .. } => {
@@ -185,6 +186,30 @@ impl SessionRegistry {
         if let (Some(attention), Some(session)) = (attention, self.sessions.get_mut(&session_id)) {
             session.attention_at_ms = attention;
         }
+    }
+
+    /// Applies a progress report as of when it was written, returning `false`
+    /// without change when the session is not tracked: a progress file never
+    /// creates a session.
+    pub fn apply_progress(&mut self, record: ProgressRecord, now_ms: u64) -> bool {
+        let reported_at = self.recorded_at(record.written_at_ms, now_ms);
+        let Some(session) = self.sessions.get_mut(&record.session_id) else {
+            return false;
+        };
+
+        session.record_progress(ProgressReport {
+            reported_at,
+            eta: record.eta,
+            step: record.step,
+        });
+        true
+    }
+
+    fn recorded_at(&self, written_at_ms: u64, now_ms: u64) -> Instant {
+        let now = self.clock.now();
+        let age = Duration::from_millis(now_ms.saturating_sub(written_at_ms));
+
+        now.checked_sub(age).unwrap_or(now)
     }
 
     /// Records that a session was seen at `seen_at_ms`, keeping the latest
@@ -290,6 +315,11 @@ impl SessionRegistry {
         if let Some(jumpable) = enrichment.jumpable {
             session.jumpable = jumpable;
         }
+        if let Some(activity) = enrichment.transcript {
+            let now = self.clock.now();
+            let at = now.checked_sub(activity.written_ago).unwrap_or(now);
+            session.record_transcript(at);
+        }
     }
 
     /// Marks a session read as of `now_ms`, which is what a click in the
@@ -380,6 +410,7 @@ impl SessionRegistry {
                 working_time: session.working_time(now),
                 longest_turn: session.longest_turn(),
                 notification_message: session.notification_message.clone(),
+                signals: session.work_signals(now),
             };
 
             match grouped.iter_mut().find(|(existing, _, _)| existing == &key) {
@@ -427,7 +458,8 @@ impl SessionRegistry {
 mod tests {
     use super::*;
     use crate::clock::TestClock;
-    use crate::session::event::{DiscoveredSession, HookEvent};
+    use crate::session::event::{DiscoveredSession, HookEvent, TranscriptActivity};
+    use crate::session::signals::STALE_AFTER;
     use crate::session::status::UNKNOWN_RESOLUTION_WINDOW;
 
     fn minutes(count: u64) -> Duration {
@@ -1711,5 +1743,143 @@ mod tests {
         assert!(snapshot.groups.is_empty());
         assert_eq!(snapshot.session_count, 0);
         assert_eq!(snapshot.unread_count, 0);
+    }
+
+    fn transcript_written(registry: &mut SessionRegistry, session_id: &str, ago: Duration) {
+        registry.apply_enrichment(
+            session_id,
+            SessionEnrichment {
+                transcript: Some(TranscriptActivity { written_ago: ago }),
+                ..SessionEnrichment::default()
+            },
+        );
+    }
+
+    #[test]
+    fn a_working_session_whose_transcript_went_quiet_six_minutes_ago_is_stale() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status(
+                "session-1",
+                HookEventKind::UserPromptSubmit,
+                NOW_MS - 10 * 60 * 1000,
+            ),
+            NOW_MS,
+        );
+
+        transcript_written(&mut registry, "session-1", minutes(6));
+
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to have signals");
+        assert!(signals.stale);
+        assert_eq!(signals.quiet_for, Some(minutes(6)));
+    }
+
+    #[test]
+    fn a_fresh_prompt_ends_a_stale_spell() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status(
+                "session-1",
+                HookEventKind::UserPromptSubmit,
+                NOW_MS - 10 * 60 * 1000,
+            ),
+            NOW_MS,
+        );
+        transcript_written(&mut registry, "session-1", minutes(6));
+
+        registry.apply_status(
+            status("session-1", HookEventKind::UserPromptSubmit, NOW_MS),
+            NOW_MS,
+        );
+
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to have signals");
+        assert!(!signals.stale);
+        assert_eq!(signals.quiet_for, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_done_session_has_no_signals() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_hook_event(hook("session-1", HookEventKind::UserPromptSubmit));
+        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
+
+        transcript_written(&mut registry, "session-1", minutes(6));
+
+        assert_eq!(find(&registry.snapshot(), "session-1").signals, None);
+    }
+
+    #[test]
+    fn a_quiet_working_session_turns_stale_without_another_scan() {
+        let (clock, mut registry) = dated_registry();
+        registry.apply_hook_event(hook("session-1", HookEventKind::UserPromptSubmit));
+        transcript_written(&mut registry, "session-1", Duration::ZERO);
+        assert!(
+            !find(&registry.snapshot(), "session-1")
+                .signals
+                .expect("signals")
+                .stale
+        );
+
+        clock.advance(STALE_AFTER);
+
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to have signals");
+        assert!(signals.stale);
+        assert_eq!(signals.quiet_for, Some(STALE_AFTER));
+    }
+
+    #[test]
+    fn transcript_activity_does_not_move_a_session_within_its_group() {
+        let (clock, mut registry) = dated_registry();
+        registry.apply_hook_event(hook("session-1", HookEventKind::UserPromptSubmit));
+        clock.advance(minutes(1));
+        registry.apply_hook_event(hook("session-2", HookEventKind::UserPromptSubmit));
+        enrich(&mut registry, "session-1", "aydy", "main");
+        enrich(&mut registry, "session-2", "aydy", "main");
+        assert_eq!(ids(&registry.snapshot()), vec!["session-2", "session-1"]);
+
+        clock.advance(minutes(1));
+        transcript_written(&mut registry, "session-1", Duration::ZERO);
+
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.groups.len(), 1);
+        assert_eq!(ids(&snapshot), vec!["session-2", "session-1"]);
+    }
+
+    fn progress(session_id: &str, written_at_ms: u64) -> ProgressRecord {
+        ProgressRecord {
+            session_id: session_id.to_string(),
+            eta: minutes(6),
+            step: None,
+            written_at_ms,
+        }
+    }
+
+    #[test]
+    fn progress_for_an_unknown_session_creates_nothing() {
+        let (_clock, mut registry) = dated_registry();
+
+        assert!(!registry.apply_progress(progress("session-1", NOW_MS), NOW_MS));
+        assert_eq!(registry.snapshot().session_count, 0);
+    }
+
+    #[test]
+    fn progress_for_a_known_session_is_applied() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::UserPromptSubmit, NOW_MS - 1_000),
+            NOW_MS,
+        );
+
+        assert!(registry.apply_progress(progress("session-1", NOW_MS), NOW_MS));
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to carry signals");
+        assert!(signals.eta.is_some());
     }
 }

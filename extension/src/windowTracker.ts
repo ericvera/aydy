@@ -1,29 +1,61 @@
 import { watch } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 
-import { claudeSessionsDir, seenDir, statusDir, windowsDir } from './aydyPaths'
-import { isUnread, ownerOf, sessionDir, windowGlance } from './sessionState'
-import type { SessionStatus, WindowFolders, WindowGlance } from './sessionState'
+import {
+  claudeSessionsDir,
+  progressDir,
+  seenDir,
+  statusDir,
+  windowsDir,
+} from './aydyPaths'
+import {
+  isUnread,
+  isWorking,
+  ownerOf,
+  sessionDir,
+  windowGlance,
+} from './sessionState'
+import type {
+  SessionStatus,
+  TitleSignal,
+  WindowFolders,
+  WindowGlance,
+} from './sessionState'
 import {
   pruneStale,
   readLiveSessions,
+  readProgress,
   readSeen,
   readStatuses,
   resolveCwd,
+  transcriptActivity,
   writeSeen,
 } from './sessionStore'
 import { knownWindows } from './windowRegistry'
+import {
+  mostUrgent,
+  nextTurnStart,
+  sessionSignal,
+  titleSignal,
+} from './workSignal'
+import type { ProgressReport, SessionSignal } from './workSignal'
 
 export interface TrackerDirs {
   status: string
   seen: string
   windows: string
   sessions: string
+  progress: string
 }
 
 export interface TrackerStore {
   readStatuses: () => Promise<SessionStatus[]>
   readSeen: () => Promise<Map<string, number>>
+  readProgress: () => Promise<Map<string, ProgressReport>>
+  transcriptActivity: (
+    transcriptPath: string,
+    sessionId: string,
+  ) => Promise<number | null>
   writeSeen: (sessionId: string, ms: number) => Promise<void>
   readLiveSessions: () => Promise<Map<string, string | null> | null>
   resolveCwd: (cwd: string | null) => Promise<string | null>
@@ -69,11 +101,14 @@ const defaultDirs = (): TrackerDirs => ({
   seen: seenDir(),
   windows: windowsDir(),
   sessions: claudeSessionsDir(),
+  progress: progressDir(),
 })
 
 const defaultStore = (dirs: TrackerDirs): TrackerStore => ({
   readStatuses: async () => readStatuses(dirs),
   readSeen: async () => readSeen(dirs),
+  readProgress: async () => readProgress(dirs),
+  transcriptActivity,
   writeSeen: async (sessionId, ms) => writeSeen(sessionId, ms, dirs),
   readLiveSessions: async () => readLiveSessions(dirs),
   resolveCwd,
@@ -100,6 +135,7 @@ export class WindowTracker {
   private rerun = false
   private disposed = false
   private lastGlance: WindowGlance | null = null
+  private readonly turnStarts = new Map<string, number | null>()
 
   constructor(options: WindowTrackerOptions) {
     this.pid = options.pid
@@ -114,7 +150,12 @@ export class WindowTracker {
   }
 
   async start(): Promise<void> {
-    const watched = [this.dirs.status, this.dirs.seen, this.dirs.windows]
+    const watched = [
+      this.dirs.status,
+      this.dirs.seen,
+      this.dirs.windows,
+      this.dirs.progress,
+    ]
     for (const dir of watched) {
       try {
         await mkdir(dir, { recursive: true })
@@ -234,15 +275,73 @@ export class WindowTracker {
     if (this.disposed) {
       return
     }
-    const glance = windowGlance(owned, seen)
+    const glance = windowGlance(owned, seen, await this.signalFor(owned))
     const last = this.lastGlance
     if (
       last === null ||
       last.unread !== glance.unread ||
-      last.working !== glance.working
+      last.working !== glance.working ||
+      last.signal?.stale !== glance.signal?.stale ||
+      last.signal?.text !== glance.signal?.text
     ) {
       this.lastGlance = glance
       this.onGlance(glance)
     }
+  }
+
+  private async signalFor(
+    owned: readonly SessionStatus[],
+  ): Promise<TitleSignal | null> {
+    const ids = new Set(owned.map((status) => status.sessionId))
+    for (const id of this.turnStarts.keys()) {
+      if (!ids.has(id)) {
+        this.turnStarts.delete(id)
+      }
+    }
+    for (const status of owned) {
+      this.turnStarts.set(
+        status.sessionId,
+        nextTurnStart(this.turnStarts.get(status.sessionId) ?? null, status),
+      )
+    }
+    const working = owned.filter(isWorking)
+    if (working.length === 0) {
+      return null
+    }
+    let progress: Map<string, ProgressReport>
+    try {
+      progress = await this.store.readProgress()
+    } catch {
+      progress = new Map()
+    }
+    const now = Date.now()
+    const signals: SessionSignal[] = []
+    for (const status of working) {
+      let transcriptWrittenAt: number | null = null
+      if (status.transcriptPath !== null) {
+        try {
+          transcriptWrittenAt = await this.store.transcriptActivity(
+            status.transcriptPath,
+            status.sessionId,
+          )
+        } catch {
+          transcriptWrittenAt = null
+        }
+      }
+      const signal = sessionSignal(
+        {
+          status,
+          turnStartedAt: this.turnStarts.get(status.sessionId) ?? null,
+          transcriptWrittenAt,
+          progress: progress.get(status.sessionId) ?? null,
+        },
+        now,
+      )
+      if (signal !== null) {
+        signals.push(signal)
+      }
+    }
+    const urgent = mostUrgent(signals)
+    return urgent === null ? null : titleSignal(urgent)
   }
 }

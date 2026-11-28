@@ -23,7 +23,10 @@
  * as the popover is open. With the pointer off the list, the list is exactly
  * what was drawn.
  */
+import { computed } from 'vue'
+
 import type { SessionStatus } from '../../types/SessionStatus'
+import type { WorkSignals } from '../../types/WorkSignals'
 import { formatDuration } from '../../utils/formatDuration'
 import { statusText } from '../../utils/statusText'
 
@@ -31,9 +34,47 @@ interface Props {
   status: SessionStatus
   workingTimeMs: number
   longestTurnMs: number
+  signals: WorkSignals | null
 }
 
 const props = defineProps<Props>()
+
+const signalParts = computed(() => {
+  const signals = props.signals
+
+  if (props.status !== 'working' || signals === null) {
+    return []
+  }
+
+  const parts: { text: string; quiet: boolean }[] = []
+
+  if (signals.stale) {
+    const duration =
+      signals.quietMs === null ? '' : ` ${formatDuration(signals.quietMs)}`
+
+    parts.push({
+      text: `Quiet${duration} · nothing written to the transcript`,
+      quiet: true,
+    })
+  }
+
+  if (signals.turnElapsedMs !== null) {
+    parts.push({
+      text: `This turn ${formatDuration(signals.turnElapsedMs)}`,
+      quiet: false,
+    })
+  }
+
+  parts.push({
+    text:
+      signals.eta === null
+        ? 'No ETA reported'
+        : `ETA reported ${formatDuration(signals.eta.reportedAgoMs)} ago`,
+    quiet: false,
+  })
+
+  return parts
+})
 </script>
 
 <template>
@@ -41,6 +82,13 @@ const props = defineProps<Props>()
     class="hidden invisible flex-wrap gap-3 text-0 text-neutral-5 group-hover/list:flex group-hover/row:visible"
   >
     <span>{{ statusText(props.status) }}</span>
+    <span
+      v-for="part in signalParts"
+      :key="part.text"
+      :class="{ 'text-neutral-6': part.quiet }"
+    >
+      {{ part.text }}
+    </span>
     <span>Working time {{ formatDuration(props.workingTimeMs) }}</span>
     <span>Longest turn {{ formatDuration(props.longestTurnMs) }}</span>
   </span>

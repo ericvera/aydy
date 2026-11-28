@@ -18,6 +18,7 @@ import {
   listReasons,
   reopenAsWorkspace,
   unsafeReasons,
+  workspaceOpenElsewhere,
 } from './autoReopen'
 import type { SessionEvent, SessionStatus } from './sessionState'
 import type { WorkspaceDirs } from './workspaceFile'
@@ -99,6 +100,7 @@ const status = (
   sessionId,
   event,
   cwd: null,
+  transcriptPath: null,
   eventAt: 0,
   subagentsRunning: false,
   informational: false,
@@ -198,4 +200,52 @@ it('reopenAsWorkspace: writes and registers the file before opening it in the sa
   }
   expect(written.settings['window.title']).toBe('● okven')
   expect(existsSync(join(dirs.workspaces, 'index'))).toBe(true)
+})
+
+it('workspaceOpenElsewhere: finds another window holding the sibling workspace', () => {
+  const sibling = siblingWorkspacePath(folder)
+  expect(
+    workspaceOpenElsewhere(
+      folder,
+      1,
+      [{ pid: 2, folders: [folder], workspace: sibling }],
+      dirs,
+    ),
+  ).toBe(sibling)
+})
+
+it('workspaceOpenElsewhere: finds another window holding the legacy workspace', () => {
+  const legacy = legacyWorkspacePath(folder, dirs)
+  expect(
+    workspaceOpenElsewhere(
+      folder,
+      1,
+      [{ pid: 2, folders: [folder], workspace: legacy }],
+      dirs,
+    ),
+  ).toBe(legacy)
+})
+
+it('workspaceOpenElsewhere: ignores this window and other windows', () => {
+  expect(
+    workspaceOpenElsewhere(
+      folder,
+      1,
+      [
+        { pid: 1, folders: [folder], workspace: siblingWorkspacePath(folder) },
+        {
+          pid: 2,
+          folders: [join(root, 'other')],
+          workspace: siblingWorkspacePath(join(root, 'other')),
+        },
+        { pid: 3, folders: [folder], workspace: null },
+        { pid: 4, folders: [folder] },
+      ],
+      dirs,
+    ),
+  ).toBeNull()
+})
+
+it('workspaceOpenElsewhere: returns null with no windows', () => {
+  expect(workspaceOpenElsewhere(folder, 1, [], dirs)).toBeNull()
 })
