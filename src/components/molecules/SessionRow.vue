@@ -70,6 +70,7 @@ const click = (): void => {
       :status="props.session.status"
       :working-time-ms="props.session.workingTimeMs"
       :longest-turn-ms="props.session.longestTurnMs"
+      :signals="props.session.signals"
     />
   </button>
 </template>

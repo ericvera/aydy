@@ -134,7 +134,8 @@ Top to bottom, at 320px:
    `· N new` half appears only when something is unread, and its number is the
    same unread count the icon shows. The settings control sits on the right — a
    gear, and the only way into settings. It is on the list and nowhere else.
-2. **Body** — the grouped session list, one line per session.
+2. **Body** — the grouped session list, one line per session, plus a progress
+   line under each Working row.
 3. **Footer** — quit, and nothing else.
 
 The header count is written here because it is the popover's half of the icon's
@@ -151,9 +152,22 @@ session list and nowhere else — no other screen in the mock has a footer.
 
 ### The list
 
-- **A row is a status dot and a title, on one line.** Nothing else: no working
-  time, no longest turn, no status text, no tab identifier. Four rounds of mock
-  review took each of those off the row, and they are on hover instead.
+- **A row is a status dot and a title, on one line** — every row but a Working
+  one. Nothing else: no working time, no longest turn, no status text, no tab
+  identifier. Four rounds of mock review took each of those off the row, and
+  they are on hover instead.
+- **A Working row carries a second, always-visible progress line**: a bar and
+  `4/7 · ~6m left`, `~6m left`, `2m past ETA` or `3m elapsed`, or **Quiet 9m**
+  first when the session is stale. It breaks the one-line rule because the owner
+  wanted progress and liveness at a glance, without opening anything, and it
+  costs height only for sessions that are working.
+- **A stale session's dot is a hollow ring** in working blue. Its status stays
+  Working: stale is a signal beside status, set when nothing has been written to
+  the session's transcript, or to its subagents' transcripts, for 5 minutes.
+- **Progress comes only from the agent's own report**, made through the
+  `aydy:progress` skill. An ETA reported before the current prompt is
+  discarded. Without a report the line shows how long the turn has run. AYDY
+  does not read TodoWrite or task lists.
 - **Unread is weight and brightness** — `title-unread` against `title-read`, the
   two shortcuts in `uno.config.ts`. Never colour: an accent bar and a trailing
   coloured dot were both considered and rejected, because either makes unread
@@ -173,8 +187,11 @@ session list and nowhere else — no other screen in the mock has a footer.
 - **Hover detail** is a passive reveal on the row itself — not a popup, not a
   click target. It is a second line under the title carrying the status in
   words and both durations, each labelled, so working time is never read as
-  elapsed time. It is available on every row, including rows that cannot be
-  jumped to.
+  elapsed time. A Working row with signals adds, after the status: when stale,
+  **Quiet 9m · nothing written to the transcript**, one step brighter in
+  `neutral-6`; **This turn 12m**; and **ETA reported 1m ago**, or **No ETA
+  reported**. These parts are hover-only and add nothing to the progress line.
+  It is available on every row, including rows that cannot be jumped to.
 - **The reveal is CSS**, and never component state. The popover hides without
   unmounting its DOM and the list reorders under a still pointer, and neither
   produces the pointer event a stored flag would need to close again — a row
@@ -392,6 +409,10 @@ write, one per session with when it was last looked at. Rust reads both every
 half second and derives grouping, ordering, unread, both counts and the icon
 state from a single registry snapshot, then pushes it to the popover over a
 `tauri::ipc::Channel` at most ten times a second, and only when it has changed.
-The interface renders what it is given and derives nothing about state on its
-own — a second derivation in the frontend is how an icon and a list start to
+Working sessions' signals come from two more sources: the **progress files**
+under `progress/`, which the plugin's `aydy-progress` writes when the agent
+reports a step or an ETA, and the transcript activity — when the session's
+transcript and its subagents' transcripts were last written — read on the 25 s
+scan. The interface renders what it is given and derives nothing about state on
+its own — a second derivation in the frontend is how an icon and a list start to
 disagree.

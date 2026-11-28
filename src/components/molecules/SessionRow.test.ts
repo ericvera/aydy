@@ -199,3 +199,22 @@ it('draws a stale working row with a hollow dot', () => {
     'Quiet 9m 31m elapsed',
   )
 })
+
+it("passes a working row's signals through to the detail", () => {
+  const wrapper = row({
+    status: 'working',
+    workingTimeMs: 180_000,
+    signals: {
+      stale: false,
+      quietMs: null,
+      turnElapsedMs: 180_000,
+      step: null,
+      eta: null,
+      fractionPermille: null,
+    },
+  })
+
+  expect(detailText(wrapper)).toBe(
+    'Working This turn 3m No ETA reported Working time 3m Longest turn 0s',
+  )
+})
