@@ -410,6 +410,7 @@ mod tests {
                 working_time: Duration::from_secs(90),
                 longest_turn: Duration::from_millis(1_500),
                 notification_message: None,
+                signals: None,
             })
             .collect();
 
@@ -485,6 +486,7 @@ mod tests {
             working_time: Duration::from_secs(90),
             longest_turn: Duration::from_millis(1_500),
             notification_message: Some("Claude needs your permission".to_string()),
+            signals: None,
         };
 
         let payload = SessionPayload::from(&session);
@@ -519,6 +521,7 @@ mod tests {
             working_time: Duration::ZERO,
             longest_turn: Duration::ZERO,
             notification_message: None,
+            signals: None,
         };
 
         let payload = SessionPayload::from(&session);

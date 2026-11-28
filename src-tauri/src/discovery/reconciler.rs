@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
@@ -13,7 +13,7 @@ use crate::discovery::repo::{self, RepoIdentity};
 use crate::discovery::session_files::{self, ProcessTable, SessionFile};
 use crate::discovery::transcript::{self, TranscriptCache, TranscriptFacts};
 use crate::session::event::{
-    DiscoveredSession, ReconciliationResult, SessionEnrichment, SessionId,
+    DiscoveredSession, ReconciliationResult, SessionEnrichment, SessionId, TranscriptActivity,
 };
 use crate::session::registry::SessionRegistry;
 use crate::sync::lock_recovering;
@@ -75,6 +75,9 @@ pub struct Scan {
     pub repos: Vec<(SessionId, RepoIdentity)>,
     /// What each session seen has in its transcript.
     pub transcripts: Vec<(SessionId, TranscriptFacts)>,
+    /// When each session seen last had its transcripts written, for the
+    /// sessions whose transcript could be read.
+    pub activity: Vec<(SessionId, SystemTime)>,
 }
 
 /// The periodic reconciliation scan.
@@ -176,6 +179,9 @@ impl Reconciler {
             ) {
                 Some(path) => {
                     let facts = self.transcripts.read(&path);
+                    if let Some(time) = transcript::last_activity(&path, &session.session_id) {
+                        scan.activity.push((session.session_id.clone(), time));
+                    }
                     read.insert(path);
 
                     facts
@@ -297,7 +303,7 @@ fn discovered(
 /// lock can starve the runtime's IO and timer driver.
 pub fn scan_and_apply(reconciler: &mut Reconciler, registry: &Mutex<SessionRegistry>) {
     let scan = reconciler.scan();
-    let enrichment = enrichment(&scan);
+    let enrichment = enrichment(&scan, SystemTime::now());
     let mut registry = lock_recovering(registry);
 
     registry.apply_reconciliation(scan.result);
@@ -316,7 +322,7 @@ pub fn scan_and_apply(reconciler: &mut Reconciler, registry: &Mutex<SessionRegis
 /// from the transcript, but the row label is composed here because the fallback
 /// chain needs all three at once — and because the directory it falls back to
 /// is the session's own, not the worktree-aware repository name.
-fn enrichment(scan: &Scan) -> Vec<(SessionId, SessionEnrichment)> {
+fn enrichment(scan: &Scan, now: SystemTime) -> Vec<(SessionId, SessionEnrichment)> {
     let repos: HashMap<&str, &RepoIdentity> = scan
         .repos
         .iter()
@@ -326,6 +332,11 @@ fn enrichment(scan: &Scan) -> Vec<(SessionId, SessionEnrichment)> {
         .transcripts
         .iter()
         .map(|(session_id, facts)| (session_id.as_str(), facts))
+        .collect();
+    let activity: HashMap<&str, SystemTime> = scan
+        .activity
+        .iter()
+        .map(|(session_id, time)| (session_id.as_str(), *time))
         .collect();
 
     scan.result
@@ -345,6 +356,11 @@ fn enrichment(scan: &Scan) -> Vec<(SessionId, SessionEnrichment)> {
                     worktree: identity.and_then(|identity| identity.worktree.clone()),
                     branch: branch.map(str::to_string),
                     jumpable: None,
+                    transcript: activity.get(session.session_id.as_str()).map(|time| {
+                        TranscriptActivity {
+                            written_ago: now.duration_since(*time).unwrap_or(Duration::ZERO),
+                        }
+                    }),
                 },
             )
         })
@@ -1097,6 +1113,78 @@ mod tests {
         let scan = scan_of("derived-working", &cwd, WORKING_TRANSCRIPT).scan();
 
         assert_eq!(scan.result.present[0].status, Some(SessionStatus::Working));
+    }
+
+    #[test]
+    fn a_scan_reports_when_a_live_sessions_transcript_was_last_written() {
+        let cwd = scratch_dir("activity");
+        let sessions = sessions_dir(
+            "activity",
+            &[(11, &session_file(11, "session-a", &cwd, "claude-vscode"))],
+        );
+        let projects = projects_dir("activity", &[(&cwd, "session-a", WORKING_TRANSCRIPT)]);
+        let written = std::fs::metadata(
+            projects
+                .join(transcript::project_slug(&cwd))
+                .join("session-a.jsonl"),
+        )
+        .and_then(|metadata| metadata.modified())
+        .expect("the transcript to have a modified time");
+
+        let scan = reconciler_reading(sessions, projects, [11]).scan();
+
+        assert_eq!(scan.activity, vec![("session-a".to_string(), written)]);
+    }
+
+    #[test]
+    fn enrichment_ages_transcript_activity_against_the_supplied_now() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        let scan = Scan {
+            result: ReconciliationResult {
+                present: vec![
+                    DiscoveredSession::new("written"),
+                    DiscoveredSession::new("no-transcript"),
+                    DiscoveredSession::new("future"),
+                ],
+                gone: Vec::new(),
+            },
+            activity: vec![
+                ("written".to_string(), now - Duration::from_secs(90)),
+                ("future".to_string(), now + Duration::from_secs(30)),
+            ],
+            ..Scan::default()
+        };
+
+        let fields: HashMap<SessionId, SessionEnrichment> =
+            enrichment(&scan, now).into_iter().collect();
+
+        assert_eq!(
+            fields["written"].transcript,
+            Some(TranscriptActivity {
+                written_ago: Duration::from_secs(90)
+            })
+        );
+        assert_eq!(fields["no-transcript"].transcript, None);
+        assert_eq!(
+            fields["future"].transcript,
+            Some(TranscriptActivity {
+                written_ago: Duration::ZERO
+            })
+        );
+    }
+
+    #[test]
+    fn a_session_with_no_transcript_reports_no_activity() {
+        let cwd = scratch_dir("activity-none");
+        let sessions = sessions_dir(
+            "activity-none",
+            &[(11, &session_file(11, "session-a", &cwd, "claude-vscode"))],
+        );
+
+        let scan = reconciler_reading(sessions, scratch_dir("activity-none-projects"), [11]).scan();
+
+        assert!(scan.activity.is_empty());
+        assert_eq!(enrichment(&scan, SystemTime::now())[0].1.transcript, None);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::session::event::{
     HookEvent, HookEventKind, ReconciliationResult, SessionEnrichment, SessionId,
 };
 use crate::session::session::Session;
+use crate::session::signals::WorkSignals;
 use crate::session::status::SessionStatus;
 
 /// The label a row falls back to when nothing else is known about a session.
@@ -43,6 +44,8 @@ pub struct SessionSnapshot {
     pub longest_turn: Duration,
     /// What the session is waiting on, from its most recent notification.
     pub notification_message: Option<String>,
+    /// The stale and progress signals, present only while Working.
+    pub signals: Option<WorkSignals>,
 }
 
 /// One group of sessions, already ordered.
@@ -290,6 +293,11 @@ impl SessionRegistry {
         if let Some(jumpable) = enrichment.jumpable {
             session.jumpable = jumpable;
         }
+        if let Some(activity) = enrichment.transcript {
+            let now = self.clock.now();
+            let at = now.checked_sub(activity.written_ago).unwrap_or(now);
+            session.record_transcript(at);
+        }
     }
 
     /// Marks a session read as of `now_ms`, which is what a click in the
@@ -380,6 +388,7 @@ impl SessionRegistry {
                 working_time: session.working_time(now),
                 longest_turn: session.longest_turn(),
                 notification_message: session.notification_message.clone(),
+                signals: session.work_signals(now),
             };
 
             match grouped.iter_mut().find(|(existing, _, _)| existing == &key) {
@@ -427,7 +436,8 @@ impl SessionRegistry {
 mod tests {
     use super::*;
     use crate::clock::TestClock;
-    use crate::session::event::{DiscoveredSession, HookEvent};
+    use crate::session::event::{DiscoveredSession, HookEvent, TranscriptActivity};
+    use crate::session::signals::STALE_AFTER;
     use crate::session::status::UNKNOWN_RESOLUTION_WINDOW;
 
     fn minutes(count: u64) -> Duration {
@@ -1711,5 +1721,111 @@ mod tests {
         assert!(snapshot.groups.is_empty());
         assert_eq!(snapshot.session_count, 0);
         assert_eq!(snapshot.unread_count, 0);
+    }
+
+    fn transcript_written(registry: &mut SessionRegistry, session_id: &str, ago: Duration) {
+        registry.apply_enrichment(
+            session_id,
+            SessionEnrichment {
+                transcript: Some(TranscriptActivity { written_ago: ago }),
+                ..SessionEnrichment::default()
+            },
+        );
+    }
+
+    #[test]
+    fn a_working_session_whose_transcript_went_quiet_six_minutes_ago_is_stale() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status(
+                "session-1",
+                HookEventKind::UserPromptSubmit,
+                NOW_MS - 10 * 60 * 1000,
+            ),
+            NOW_MS,
+        );
+
+        transcript_written(&mut registry, "session-1", minutes(6));
+
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to have signals");
+        assert!(signals.stale);
+        assert_eq!(signals.quiet_for, Some(minutes(6)));
+    }
+
+    #[test]
+    fn a_fresh_prompt_ends_a_stale_spell() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status(
+                "session-1",
+                HookEventKind::UserPromptSubmit,
+                NOW_MS - 10 * 60 * 1000,
+            ),
+            NOW_MS,
+        );
+        transcript_written(&mut registry, "session-1", minutes(6));
+
+        registry.apply_status(
+            status("session-1", HookEventKind::UserPromptSubmit, NOW_MS),
+            NOW_MS,
+        );
+
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to have signals");
+        assert!(!signals.stale);
+        assert_eq!(signals.quiet_for, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_done_session_has_no_signals() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_hook_event(hook("session-1", HookEventKind::UserPromptSubmit));
+        registry.apply_hook_event(hook("session-1", HookEventKind::Stop));
+
+        transcript_written(&mut registry, "session-1", minutes(6));
+
+        assert_eq!(find(&registry.snapshot(), "session-1").signals, None);
+    }
+
+    #[test]
+    fn a_quiet_working_session_turns_stale_without_another_scan() {
+        let (clock, mut registry) = dated_registry();
+        registry.apply_hook_event(hook("session-1", HookEventKind::UserPromptSubmit));
+        transcript_written(&mut registry, "session-1", Duration::ZERO);
+        assert!(
+            !find(&registry.snapshot(), "session-1")
+                .signals
+                .expect("signals")
+                .stale
+        );
+
+        clock.advance(STALE_AFTER);
+
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to have signals");
+        assert!(signals.stale);
+        assert_eq!(signals.quiet_for, Some(STALE_AFTER));
+    }
+
+    #[test]
+    fn transcript_activity_does_not_move_a_session_within_its_group() {
+        let (clock, mut registry) = dated_registry();
+        registry.apply_hook_event(hook("session-1", HookEventKind::UserPromptSubmit));
+        clock.advance(minutes(1));
+        registry.apply_hook_event(hook("session-2", HookEventKind::UserPromptSubmit));
+        enrich(&mut registry, "session-1", "aydy", "main");
+        enrich(&mut registry, "session-2", "aydy", "main");
+        assert_eq!(ids(&registry.snapshot()), vec!["session-2", "session-1"]);
+
+        clock.advance(minutes(1));
+        transcript_written(&mut registry, "session-1", Duration::ZERO);
+
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.groups.len(), 1);
+        assert_eq!(ids(&snapshot), vec!["session-2", "session-1"]);
     }
 }

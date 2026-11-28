@@ -1,6 +1,7 @@
 //! Everything the registry accepts as input.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::session::status::SessionStatus;
 
@@ -143,6 +144,15 @@ pub struct SessionEnrichment {
     pub worktree: Option<String>,
     pub branch: Option<String>,
     pub jumpable: Option<bool>,
+    /// `None` means the scan found no readable transcript, which changes
+    /// nothing.
+    pub transcript: Option<TranscriptActivity>,
+}
+
+/// How long ago a session's transcripts were last written, as a scan saw them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptActivity {
+    pub written_ago: Duration,
 }
 
 #[cfg(test)]
