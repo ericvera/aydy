@@ -33,6 +33,14 @@ const CONFIG_DIR_VARIABLE: &str = "CLAUDE_CONFIG_DIR";
 /// The extension every transcript carries.
 const TRANSCRIPT_EXTENSION: &str = "jsonl";
 
+/// The directory, beside a session's transcript and named after its id, that
+/// holds the transcripts of the subagents it spawned.
+const SUBAGENTS_DIR: &str = "subagents";
+
+/// How many path parts below [`SUBAGENTS_DIR`] a subagent transcript may sit:
+/// `agent-x.jsonl` is one, `workflows/wf_1/agent-y.jsonl` is three.
+const SUBAGENT_DEPTH: usize = 3;
+
 /// The `gitBranch` value a session outside a repository reports. It is not a
 /// branch name, and treating it as one puts a group called `HEAD` in the list.
 const DETACHED_BRANCH: &str = "HEAD";
@@ -212,6 +220,50 @@ pub fn stamp(path: &Path) -> Option<Stamp> {
         size: metadata.len(),
         modified: metadata.modified().ok(),
     })
+}
+
+/// When the session last wrote anything: the newest mtime among `transcript`
+/// and every subagent transcript beneath it, or `None` when `transcript` cannot
+/// be looked at.
+///
+/// Subagents and workflow agents write to their own files under
+/// `<session_id>/subagents/`, not to the main transcript, so a session busy in
+/// a subagent would otherwise read as quiet. It is uncached because it is a
+/// handful of stats a scan, and [`TranscriptCache`] watches only the main file,
+/// so a subagent write would never invalidate it.
+pub fn last_activity(transcript: &Path, session_id: &str) -> Option<SystemTime> {
+    let main = fs::metadata(transcript).ok()?.modified().ok()?;
+    let subagents = transcript.parent()?.join(session_id).join(SUBAGENTS_DIR);
+
+    Some(newest_within(&subagents, SUBAGENT_DEPTH).map_or(main, |newest| newest.max(main)))
+}
+
+/// The newest mtime among the transcripts at most `depth` path parts below
+/// `dir`, or `None` when there are none. An unreadable directory has none.
+fn newest_within(dir: &Path, depth: usize) -> Option<SystemTime> {
+    if depth == 0 {
+        return None;
+    }
+
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file_type = entry.file_type().ok()?;
+
+            if file_type.is_dir() {
+                newest_within(&path, depth - 1)
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == TRANSCRIPT_EXTENSION)
+            {
+                entry.metadata().ok()?.modified().ok()
+            } else {
+                None
+            }
+        })
+        .max()
 }
 
 /// Reads `path` from the end, widening the window until every fact it can
@@ -1022,5 +1074,97 @@ mod tests {
             locate(&root, Some(Path::new("/Users/eric/Code/aydy")), "s-1"),
             None
         );
+    }
+
+    fn activity_transcript(name: &str) -> PathBuf {
+        let path = transcript(name, "");
+        set_age(&path, 100);
+
+        path
+    }
+
+    fn set_age(path: &Path, seconds_ago: u64) -> SystemTime {
+        let modified = SystemTime::now() - Duration::from_secs(seconds_ago);
+        File::options()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.set_modified(modified))
+            .expect("the mtime to be settable");
+
+        modified
+    }
+
+    fn subagent_file(transcript: &Path, relative: &str, seconds_ago: u64) -> SystemTime {
+        let path = transcript
+            .parent()
+            .expect("the transcript to have a directory")
+            .join("s-1")
+            .join(SUBAGENTS_DIR)
+            .join(relative);
+        fs::create_dir_all(path.parent().expect("the file to have a directory"))
+            .expect("the subagent directory to be creatable");
+        fs::write(&path, "").expect("the subagent file to be writable");
+
+        set_age(&path, seconds_ago)
+    }
+
+    fn main_modified(path: &Path) -> SystemTime {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .expect("the transcript mtime to be readable")
+    }
+
+    #[test]
+    fn activity_with_no_subagents_is_the_transcript_mtime() {
+        let path = activity_transcript("activity-alone");
+
+        assert_eq!(last_activity(&path, "s-1"), Some(main_modified(&path)));
+    }
+
+    #[test]
+    fn a_newer_subagent_transcript_is_the_activity() {
+        let path = activity_transcript("activity-subagent");
+        let newer = subagent_file(&path, "agent-x.jsonl", 10);
+
+        assert_eq!(last_activity(&path, "s-1"), Some(newer));
+    }
+
+    #[test]
+    fn a_newer_workflow_agent_transcript_is_the_activity() {
+        let path = activity_transcript("activity-workflow");
+        let newer = subagent_file(&path, "workflows/wf_1/agent-y.jsonl", 10);
+
+        assert_eq!(last_activity(&path, "s-1"), Some(newer));
+    }
+
+    #[test]
+    fn an_older_subagent_transcript_is_not_the_activity() {
+        let path = activity_transcript("activity-older");
+        subagent_file(&path, "agent-x.jsonl", 500);
+
+        assert_eq!(last_activity(&path, "s-1"), Some(main_modified(&path)));
+    }
+
+    #[test]
+    fn a_newer_file_that_is_not_a_transcript_is_not_the_activity() {
+        let path = activity_transcript("activity-not-jsonl");
+        subagent_file(&path, "agent-x.meta.json", 10);
+
+        assert_eq!(last_activity(&path, "s-1"), Some(main_modified(&path)));
+    }
+
+    #[test]
+    fn a_subagent_transcript_four_parts_deep_is_not_the_activity() {
+        let path = activity_transcript("activity-too-deep");
+        subagent_file(&path, "a/b/c/agent-z.jsonl", 10);
+
+        assert_eq!(last_activity(&path, "s-1"), Some(main_modified(&path)));
+    }
+
+    #[test]
+    fn a_missing_transcript_has_no_activity() {
+        let path = scratch_dir("activity-missing").join("s-1.jsonl");
+
+        assert_eq!(last_activity(&path, "s-1"), None);
     }
 }
