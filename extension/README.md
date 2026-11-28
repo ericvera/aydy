@@ -48,6 +48,13 @@ Everything goes through files under `~/Library/Application Support/app.aydy/`:
 - **`windows/<pid>.json`.** Each window publishes its workspace folders under its
   extension host's process id, and withdraws the file when it closes. A session belongs
   to the window whose folder most specifically contains the directory it was launched in.
+- **`progress/<session>.json`.** A session's own progress report — an ETA and an
+  optional step such as `4/7` — written only by the `aydy-progress` command of the
+  `aydy:progress` skill in the plugin under `plugin/`. The extension reads it for the title
+  signal below and never writes it.
+
+On start the extension prunes the `status/`, `seen/` and `progress/` files of sessions that
+are no longer running and have not been written for a week.
 
 The tab count and jump answers are described in their own sections below.
 
@@ -87,6 +94,22 @@ okven` for one, `● 3 okven` for several and `● 9+ okven` past nine. The coun
 window's sessions that finished or asked for something since you last had the window
 focused. When none need you, the title shows `◐ okven` while a prompt is running in one
 of them, or while its subagents are still running after it stopped, and `○ okven` otherwise.
+
+While a session is working, the title also says how it is going, right after the glyph:
+
+- `◐ 4/7 · ~6m okven · feat/x` — the session reported step 4 of 7 and about 6 minutes
+  left; `◐ ~6m okven · feat/x` when it reported an ETA without a step, and `3m over` once
+  the ETA has passed. A report counts only if it was written during the current turn.
+- `◐ 3m okven · feat/x` — no report, so the time the current turn has been running.
+- `◌ quiet 9m okven · feat/x` — stale: neither the session's transcript nor any of its
+  subagents' transcripts has been written for 5 minutes or more, so it may be stuck.
+- `◐ okven · feat/x` — nothing to say yet.
+
+Progress comes only from the `aydy:progress` skill; without it the title falls back to
+elapsed turn time. Claude Code's own todo list (TodoWrite) is not read. With several
+working sessions in one window, the title shows the most urgent: a stale one first (the
+longest quiet), then the shortest time left, then the longest running. A session that
+needs you still takes the slot, as `● okven`. The texts change at most once a minute.
 
 The name after the glyph is the repository, with the worktree or branch after a `·`:
 `okven · eric-attribution-2` in a linked worktree, `okven · feat/x` in the main checkout
