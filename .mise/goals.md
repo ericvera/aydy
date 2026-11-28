@@ -14,7 +14,21 @@ Design ask, not a bug — nothing to reproduce.
 - Titles are persisted to the user's `.code-workspace` via `setWorkspaceTitle` (extension/src/workspaceFile.ts:216-235); old-format titles linger until next write. No schema/API involved.
 - Title fully replaces VS Code's `window.title`.
 
-## Open questions
+## Decisions
 
-1. Title layout (repo-first with em dash / brackets / different divider).
-2. Status wording (terse / popover words / drop elapsed).
+- Layout: repo label first, status last in square brackets; glyph stays in front. `◐ okven · feat/x [3m]`, `◐ okven · feat/x [1h 10m]`, `◐ okven · feat/x [<1m]`, `◐ okven · feat/x [~6m]`, `◐ okven · feat/x [4/7 · ~6m]`, `◐ okven · feat/x [4/7 · 2m over]`, `◌ okven · feat/x [quiet 9m]`.
+- Status wording stays terse as today (`3m`, `~6m`, `2m over`, `quiet 9m`); the `·` between step and time stays (same character as the label's divider).
+- Titles without a signal are unchanged: `● okven`, `● 3 okven`, `○ okven`, `◐ okven` (no brackets).
+
+## Assumptions
+
+- Popover wording (SessionProgressLine.vue) is out of scope and unchanged.
+- No mock: the change is the VS Code window title string, not the app's Vue UI, and the owner approved the exact strings above.
+- extension/README.md and docs/design/menubar-ux.md title examples are updated to the new format; tests asserting titles are updated.
+- Old-format titles already persisted in `.code-workspace` files are left alone; they are replaced on the next title write.
+
+## Proposal
+
+- Issue: the window title puts status before the repo and reuses the label's `·`, so time runs into the repo name (`◐ 4/7 · ~6m okven · feat/x`).
+- Fix: `tabTitle` puts the label first and the signal last in square brackets (`◐ okven · feat/x [4/7 · ~6m]`); update tests and the README/menubar-ux title examples.
+- Skips: spec and critic — one small extension change, no schema or API change.
