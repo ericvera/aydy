@@ -1,4 +1,5 @@
 import type { SessionStatus } from './SessionStatus'
+import type { WorkSignals } from './WorkSignals'
 
 /**
  * One session row. Durations are whole milliseconds.
@@ -14,4 +15,5 @@ export interface Session {
   workingTimeMs: number
   longestTurnMs: number
   notificationMessage: string | null
+  signals: WorkSignals | null
 }
