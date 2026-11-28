@@ -30,9 +30,11 @@ New feature work; nothing to reproduce.
 
 9. mise integration is documentation only: the plugin's README shows a Skills & guides line a repo can paste into its `.claude/mise-config.md` (e.g. `- aydy:progress (skill): at the start of each task and after each step`). No change to mise itself, now or as a planned follow-up.
 
+10. No TodoWrite checklist fallback. Progress comes only from agent reports via `aydy:progress`; without a report, AYDY shows the current turn's elapsed time. (Critic found 0 TodoWrite or task-list calls across all transcripts on this machine.)
+
 ## Assumptions
 
-- Agent-reported ETA is the primary "time left" signal; when an agent has not reported one, AYDY falls back to the session's latest TodoWrite checklist progress (e.g. 4/7) and the current turn's elapsed time.
+- Agent-reported ETA is the primary "time left" signal; when an agent has not reported one, AYDY shows the current turn's elapsed time.
 - An agent-reported ETA older than the turn it was reported in (a new prompt started since) is discarded.
 - Stale threshold N defaults to a fixed value (e.g. 5 minutes) chosen in the spec; not user-configurable in this run.
 - (mock) Stale ranks below the two unread states and above Working in the tray icon; the tray count for stale is the number of stale sessions.
@@ -44,5 +46,5 @@ New feature work; nothing to reproduce.
 ## Proposal
 
 Issue: AYDY can't tell a busy session from a stuck one, and gives no sense of how much work is left.
-Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); a skill shipped as a Claude Code plugin from this repo (with its `aydy-progress` command) lets agents report ETA/step, falling back to TodoWrite progress and elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale; a folder window whose workspace is open elsewhere says so instead of trying to reopen; the plugin README documents a mise Skills & guides line.
+Approach: a transcript heartbeat flags Working sessions quiet ≥5m as stale (a separate signal, not a status); a skill shipped as a Claude Code plugin from this repo (with its `aydy-progress` command) lets agents report ETA/step, falling back to elapsed time; surfaces are a line under working popover rows with a hollow stale dot (A), the VS Code window title (B), and the tray icon's D1 shape when any session is stale; a folder window whose workspace is open elsewhere says so instead of trying to reopen; the plugin README documents a mise Skills & guides line.
 Skips: none (spec and critic both run — new concept, Rust core + popover + extension + a new plugin).
