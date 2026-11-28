@@ -1,0 +1,19 @@
+{
+  "version": 4,
+  "started": "2026-11-28T19:32:39.421Z",
+  "base": "main",
+  "steps": {
+    "goals": null,
+    "spec": null,
+    "critic": null,
+    "execute": null,
+    "review": null,
+    "gate": null
+  },
+  "amendments": 0,
+  "checks_from": null,
+  "fix_rounds": 0,
+  "critic_rounds": 0,
+  "gate_repairs": 0,
+  "gate_passed": null
+}
