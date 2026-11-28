@@ -21,6 +21,7 @@ const status = (
   sessionId,
   event,
   cwd,
+  transcriptPath: null,
   eventAt,
   subagentsRunning: false,
   informational: false,
@@ -39,6 +40,7 @@ it.each(['SessionStart', 'UserPromptSubmit', 'Notification', 'Stop'] as const)(
       sessionId: 'abc-1_2',
       event,
       cwd: '/a/b',
+      transcriptPath: null,
       eventAt: 42,
       subagentsRunning: false,
       informational: false,
@@ -57,6 +59,21 @@ it('parseStatus: gives a null cwd when absent or blank', () => {
       1,
     )?.cwd,
   ).toBeNull()
+})
+
+it('parseStatus: reads the transcript path, null when absent or blank', () => {
+  const read = (transcript: unknown): string | null | undefined =>
+    parseStatus(
+      JSON.stringify({
+        session_id: 's',
+        hook_event_name: 'Stop',
+        transcript_path: transcript,
+      }),
+      1,
+    )?.transcriptPath
+  expect(read('/p/s.jsonl')).toBe('/p/s.jsonl')
+  expect(read('')).toBeNull()
+  expect(read(undefined)).toBeNull()
 })
 
 it.each([
@@ -183,17 +200,26 @@ it('unreadCount counts only unread statuses', () => {
 })
 
 it.each([
-  [{ unread: 0, working: false }, '○ aydy'],
-  [{ unread: 0, working: true }, '◐ aydy'],
-  [{ unread: 1, working: false }, '● aydy'],
-  [{ unread: 2, working: false }, '● 2 aydy'],
-  [{ unread: 9, working: false }, '● 9 aydy'],
-  [{ unread: 10, working: false }, '● 9+ aydy'],
-  [{ unread: 12, working: false }, '● 9+ aydy'],
-  [{ unread: 1, working: true }, '● aydy'],
-  [{ unread: 3, working: true }, '● 3 aydy'],
+  [{ unread: 0, working: false, signal: null }, '○ aydy'],
+  [{ unread: 0, working: true, signal: null }, '◐ aydy'],
+  [{ unread: 1, working: false, signal: null }, '● aydy'],
+  [{ unread: 2, working: false, signal: null }, '● 2 aydy'],
+  [{ unread: 9, working: false, signal: null }, '● 9 aydy'],
+  [{ unread: 10, working: false, signal: null }, '● 9+ aydy'],
+  [{ unread: 12, working: false, signal: null }, '● 9+ aydy'],
+  [{ unread: 1, working: true, signal: null }, '● aydy'],
+  [{ unread: 3, working: true, signal: null }, '● 3 aydy'],
 ])('tabTitle(%j)', (glance, title) => {
   expect(tabTitle(glance, 'aydy')).toBe(title)
+})
+
+it.each([
+  [{ stale: false, text: '4/7 · ~6m' }, 0, '◐ 4/7 · ~6m label'],
+  [{ stale: true, text: 'quiet 9m' }, 0, '◌ quiet 9m label'],
+  [{ stale: true, text: 'quiet 9m' }, 1, '● label'],
+  [{ stale: false, text: '4/7 · ~6m' }, 2, '● 2 label'],
+])('tabTitle: signal %j with %i unread', (signal, unread, title) => {
+  expect(tabTitle({ unread, working: true, signal }, 'label')).toBe(title)
 })
 
 it('windowGlance is working only while a prompt runs', () => {
@@ -201,20 +227,22 @@ it('windowGlance is working only while a prompt runs', () => {
   expect(windowGlance([status('UserPromptSubmit', 100, 'a')], none)).toEqual({
     unread: 0,
     working: true,
+    signal: null,
   })
   expect(windowGlance([status('Notification', 100, 'a')], none)).toEqual({
     unread: 1,
     working: false,
+    signal: null,
   })
   expect(
     windowGlance([status('Stop', 100, 'a')], new Map([['a', 200]])),
-  ).toEqual({ unread: 0, working: false })
+  ).toEqual({ unread: 0, working: false, signal: null })
   expect(
     windowGlance(
       [status('Stop', 100, 'a'), status('UserPromptSubmit', 100, 'b')],
       none,
     ),
-  ).toEqual({ unread: 1, working: true })
+  ).toEqual({ unread: 1, working: true, signal: null })
 })
 
 const parsed = (fields: Record<string, unknown>): SessionStatus => {
@@ -238,7 +266,7 @@ it('parseStatus: a Stop with a running subagent is working, not unread', () => {
   expect(result.subagentsRunning).toBe(true)
   expect(isUnread(result, undefined)).toBe(false)
   const glance = windowGlance([result], none)
-  expect(glance).toEqual({ unread: 0, working: true })
+  expect(glance).toEqual({ unread: 0, working: true, signal: null })
   expect(tabTitle(glance, 'aydy')).toBe('◐ aydy')
 })
 
@@ -252,7 +280,11 @@ it.each([
 ])('parseStatus: a Stop with %s is unread, not working', (_label, tasks) => {
   const result = parsed({ hook_event_name: 'Stop', background_tasks: tasks })
   expect(result.subagentsRunning).toBe(false)
-  expect(windowGlance([result], none)).toEqual({ unread: 1, working: false })
+  expect(windowGlance([result], none)).toEqual({
+    unread: 1,
+    working: false,
+    signal: null,
+  })
 })
 
 it.each(['agent_completed', 'auth_success', ' agent_completed\n'])(
@@ -263,7 +295,11 @@ it.each(['agent_completed', 'auth_success', ' agent_completed\n'])(
       notification_type: type,
     })
     expect(result.informational).toBe(true)
-    expect(windowGlance([result], none)).toEqual({ unread: 0, working: false })
+    expect(windowGlance([result], none)).toEqual({
+      unread: 0,
+      working: false,
+      signal: null,
+    })
   },
 )
 

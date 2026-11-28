@@ -5,6 +5,7 @@ export interface SessionStatus {
   sessionId: string
   event: SessionEvent
   cwd: string | null
+  transcriptPath: string | null
   eventAt: number
   subagentsRunning: boolean
   informational: boolean
@@ -75,6 +76,7 @@ export const parseStatus = (
     sessionId,
     event,
     cwd: nonEmptyString(record['cwd']),
+    transcriptPath: nonEmptyString(record['transcript_path']),
     eventAt: mtimeMs,
     subagentsRunning:
       event === 'Stop' && subagentsRunning(record['background_tasks']),
@@ -148,17 +150,25 @@ export const isWorking = (status: SessionStatus): boolean =>
   status.event === 'UserPromptSubmit' ||
   (status.event === 'Stop' && status.subagentsRunning)
 
+export interface TitleSignal {
+  stale: boolean
+  text: string
+}
+
 export interface WindowGlance {
   unread: number
   working: boolean
+  signal: TitleSignal | null
 }
 
 export const windowGlance = (
   statuses: readonly SessionStatus[],
   seen: ReadonlyMap<string, number>,
+  signal: TitleSignal | null = null,
 ): WindowGlance => ({
   unread: unreadCount(statuses, seen),
   working: statuses.some(isWorking),
+  signal,
 })
 
 export const tabTitle = (glance: WindowGlance, label: string): string => {
@@ -168,6 +178,10 @@ export const tabTitle = (glance: WindowGlance, label: string): string => {
   }
   if (unread > 1) {
     return `● ${unread > 9 ? '9+' : String(unread)} ${label}`
+  }
+  const { signal } = glance
+  if (signal !== null) {
+    return `${signal.stale ? '◌' : '◐'} ${signal.text} ${label}`
   }
   return glance.working ? `◐ ${label}` : `○ ${label}`
 }

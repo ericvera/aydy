@@ -6,20 +6,25 @@ import {
   stat,
   unlink,
 } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { writeAtomically } from './atomicWrite'
-import { claudeSessionsDir, seenDir, statusDir } from './aydyPaths'
+import { claudeSessionsDir, progressDir, seenDir, statusDir } from './aydyPaths'
 import { parseStatus, SESSION_ID_PATTERN } from './sessionState'
 import type { SessionStatus } from './sessionState'
+import { parseProgress } from './workSignal'
+import type { ProgressReport } from './workSignal'
 
 export interface StoreDirs {
   status?: string
   seen?: string
   sessions?: string
+  progress?: string
 }
 
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000
+
+const SUBAGENT_DEPTH = 3
 
 const errorCode = (error: unknown): string | undefined =>
   error instanceof Error && 'code' in error && typeof error.code === 'string'
@@ -79,6 +84,84 @@ export const readStatuses = async ({
     }
   }
   return statuses
+}
+
+export const readProgress = async ({
+  progress = progressDir(),
+}: StoreDirs = {}): Promise<Map<string, ProgressReport>> => {
+  const reports = new Map<string, ProgressReport>()
+  for (const name of await listJson(progress)) {
+    const id = idOf(name)
+    if (id === null) {
+      continue
+    }
+    const path = join(progress, name)
+    try {
+      const [text, info] = await Promise.all([
+        readFile(path, 'utf8'),
+        stat(path),
+      ])
+      const report = parseProgress(text, info.mtimeMs)
+      if (report !== null) {
+        reports.set(id, report)
+      }
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') {
+        throw error
+      }
+    }
+  }
+  return reports
+}
+
+const newestWithin = async (
+  dir: string,
+  depth: number,
+): Promise<number | null> => {
+  if (depth === 0) {
+    return null
+  }
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  let newest: number | null = null
+  for (const entry of entries) {
+    const path = join(dir, entry.name)
+    let mtime: number | null = null
+    if (entry.isDirectory()) {
+      mtime = await newestWithin(path, depth - 1)
+    } else if (entry.name.endsWith('.jsonl')) {
+      try {
+        mtime = (await stat(path)).mtimeMs
+      } catch {
+        mtime = null
+      }
+    }
+    if (mtime !== null && (newest === null || mtime > newest)) {
+      newest = mtime
+    }
+  }
+  return newest
+}
+
+export const transcriptActivity = async (
+  transcriptPath: string,
+  sessionId: string,
+): Promise<number | null> => {
+  let main: number
+  try {
+    main = (await stat(transcriptPath)).mtimeMs
+  } catch {
+    return null
+  }
+  const subagents = await newestWithin(
+    join(dirname(transcriptPath), sessionId, 'subagents'),
+    SUBAGENT_DEPTH,
+  )
+  return subagents === null ? main : Math.max(main, subagents)
 }
 
 export const readSeen = async ({ seen = seenDir() }: StoreDirs = {}): Promise<
@@ -205,11 +288,16 @@ const pruneDir = async (
 export const pruneStale = async (
   live: ReadonlyMap<string, unknown> | null,
   now: number,
-  { status = statusDir(), seen = seenDir() }: StoreDirs = {},
+  {
+    status = statusDir(),
+    seen = seenDir(),
+    progress = progressDir(),
+  }: StoreDirs = {},
 ): Promise<void> => {
   if (live === null) {
     return
   }
   await pruneDir(status, live, now)
   await pruneDir(seen, live, now)
+  await pruneDir(progress, live, now)
 }

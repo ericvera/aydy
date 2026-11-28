@@ -99,6 +99,7 @@ const status = (
   sessionId,
   event,
   cwd: null,
+  transcriptPath: null,
   eventAt: 0,
   subagentsRunning: false,
   informational: false,

@@ -21,6 +21,9 @@ export const statusDir = (options: PathOptions = {}): string =>
 export const seenDir = (options: PathOptions = {}): string =>
   join(aydyDataDir(options), 'seen')
 
+export const progressDir = (options: PathOptions = {}): string =>
+  join(aydyDataDir(options), 'progress')
+
 export const jumpDir = (options: PathOptions = {}): string =>
   join(aydyDataDir(options), 'jump')
 

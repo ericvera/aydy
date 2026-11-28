@@ -63,6 +63,7 @@ const status = (
   sessionId,
   event,
   cwd,
+  transcriptPath: null,
   eventAt,
   subagentsRunning: false,
   informational: false,
@@ -250,8 +251,8 @@ it('a Stop arriving while focused stays at 0', async () => {
   await settle()
 
   expect(glances).toEqual([
-    { unread: 0, working: true },
-    { unread: 0, working: false },
+    { unread: 0, working: true, signal: null },
+    { unread: 0, working: false, signal: null },
   ])
   expect(w.writes).toEqual(['s1'])
 })
@@ -401,7 +402,7 @@ it('a running prompt makes the window working, reported once', async () => {
   tracker.poke()
   await settle()
 
-  expect(glances).toEqual([{ unread: 0, working: true }])
+  expect(glances).toEqual([{ unread: 0, working: true, signal: null }])
 })
 
 it('a focused pass followed by its own watch event does not write again', async () => {

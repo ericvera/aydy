@@ -85,7 +85,7 @@ const isClaudeTab = (tab: vscode.Tab): boolean =>
 const claudeCodeVersion = (): string | null =>
   versionOf(vscode.extensions.getExtension(CLAUDE_CODE_EXTENSION)?.packageJSON)
 
-let glance: WindowGlance = { unread: 0, working: false }
+let glance: WindowGlance = { unread: 0, working: false, signal: null }
 
 let label: string | undefined
 
