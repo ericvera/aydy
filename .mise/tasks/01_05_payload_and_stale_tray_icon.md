@@ -2,7 +2,7 @@
 
 ## Goal
 
-Send each session's work signals to the popover, and give the menu bar icon a fifth state, Stale, drawn as the D1 shape from the mock.
+Send each session's work signals to the popover, and give the menu bar icon a fifth state, Stale, drawn as the D1 shape the owner chose (described in full below).
 
 ## Files to modify/create
 
@@ -17,11 +17,12 @@ AYDY (Tauri v2 menu bar app) pushes a `SnapshotPayload` to the popover over a `t
 
 Prior tasks produced `SessionSnapshot.signals: Option<WorkSignals>` (`src-tauri/src/session/registry.rs`) where `WorkSignals { stale, quiet_for: Option<Duration>, turn_elapsed: Option<Duration>, step: Option<(Step, StepSource)>, eta: Option<Eta { remaining_ms: i64, reported_ago: Duration }>, fraction_permille: Option<u16> }` (`src-tauri/src/session/signals.rs`).
 
-Decisions reaching this task (owner-approved, `.mise/goals.md` decision 4 and mock `.mise/mock/d-tray-icon.html`):
+Decisions reaching this task (owner-approved, `.mise/goals.md` decision 4; the approved mock is not part of the repository, so everything it showed is inlined here):
 
 - Precedence: Needs input (unread) > Something new (unread) > **Stale** > Working > All quiet.
 - Stale count = number of stale sessions.
-- Shape D1: the working icon's ring drawn **dashed**, with its left half still filled solid. In the mock's 18-unit viewBox: ring `r=7`, stroke 1.5, `stroke-dasharray="2.2 2.2"`, left half disc `M9 2 A7 7 0 0 0 9 16 Z`. At 36 px every unit is 2 px. Because the left half is solid, the dashes are visible only on the right half.
+- Shape D1: the working icon's ring drawn **dashed**, with its left half still filled solid. In the mock's 18-unit viewBox: ring `r=7`, stroke 1.5, `stroke-dasharray="2.2 2.2"`, left half disc `M9 2 A7 7 0 0 0 9 16 Z`. At 36 px every unit is 2 px. Because the left half is solid, the dashes are visible only on the right half. For comparison the existing Working icon in the same viewBox is the same ring with no dash (`<circle cx="9" cy="9" r="7" fill="none" stroke-width="1.5"/>` plus the same left half disc). D1 as an SVG: `<svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.2 2.2"/><path d="M9 2 A7 7 0 0 0 9 16 Z" fill="currentColor"/></svg>`. The count beside it reads like the other states' (e.g. `1` for one stale session).
+- Doc wording the owner saw: D1 reads as "working, but the line has broken up"; while a session is stale the icon gives up the working count, and the popover still shows it.
 
 ## Guides
 
@@ -54,4 +55,4 @@ Decisions reaching this task (owner-approved, `.mise/goals.md` decision 4 and mo
 - New tests:
   - `snapshot_channel.rs`: a working session with signals serialises to JSON with `signals.stale`, `quietMs`, `turnElapsedMs`, `step.source == "agent"`, `eta.remainingMs` (negative allowed) and `fractionPermille`; a Done session serialises `"signals": null`.
   - `tray/icon.rs`: a stale working session (read) shows Stale with count = stale sessions, not working sessions; any unread session outranks Stale; a working session that is not stale still shows Working; Stale's image is distinct from every other state's.
-- Substitute check for the icon artwork: Read `src-tauri/icons/tray/stale.png` and confirm the dashed right half and solid left half, matching `.mise/mock/d-tray-icon.html` D1.
+- Substitute check for the icon artwork: Read `src-tauri/icons/tray/stale.png` and confirm the dashed right half and solid left half, matching the D1 SVG above (dashes on the right half only, roughly five gaps visible, symmetric about the horizontal axis).

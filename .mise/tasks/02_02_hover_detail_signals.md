@@ -16,10 +16,10 @@ AYDY's popover (Vue 3 + UnoCSS strict preset, `src/`) reveals a detail line unde
 
 Task 02_01 added `Session.signals: WorkSignals | null` (`src/types/WorkSignals.ts`: `stale`, `quietMs`, `turnElapsedMs`, `step {done,total,source}`, `eta {remainingMs, reportedAgoMs}`, `fractionPermille`; null unless Working), the always-visible `SessionProgressLine` under Working rows, and the hollow stale dot.
 
-Approved design: `.mise/mock/a-row-line.html` frames "Pointer on a working row" and "Pointer on the stale row", produced by `detailParts()` in `.mise/mock/mock.js`. Order of parts for a Working row with signals:
+Approved design (variant A of a mock that is not part of the repository; its two hover frames are inlined here). With the pointer on a working row the detail line read `Working | This turn 12m | ETA reported 1m ago | Working time 38m | Longest turn 14m`; on the stale row it read `Working | Quiet 9m · nothing written to the transcript | This turn 31m | No ETA reported · checklist only | Working time 52m | Longest turn 14m` (`|` marks part boundaries for reading only and is not rendered; the `·` inside a part is literal copy; in the UI each part is its own `<span>` in the `gap-3` flex row, 11px `neutral-5`, the quiet part one step brighter in `neutral-6`). Order of parts for a Working row with signals:
 
 1. status text (`Working`) — existing;
-2. when stale: `Quiet <quiet> · nothing written to the transcript` (rendered `text-neutral-6`, like the mock's `.warn`, a neutral — never a status colour);
+2. when stale: `Quiet <quiet> · nothing written to the transcript` (rendered `text-neutral-6`, a neutral — never a status colour);
 3. `This turn <turnElapsed>` (omit if `turnElapsedMs` is null);
 4. one of: `ETA reported <reportedAgo> ago` when `eta`; else `No ETA reported · checklist only` when `step` (any source); else `No ETA or checklist`;
 5. `Working time …`, `Longest turn …` — existing.
@@ -36,7 +36,7 @@ Durations via `src/utils/formatDuration.ts`. Rows that are not Working, or have 
 1. `SessionRowDetail.vue`: new prop `signals: WorkSignals | null`. Build the list of extra parts in a `computed` (only when `status === 'working'` and `signals !== null`) and render them between the status text and `Working time`, each in its own `<span>` like the existing parts (the container is `flex-wrap gap-3`). Keep the root element's classes byte-identical.
 2. `SessionRow.vue`: pass `:signals="props.session.signals"` to `SessionRowDetail`.
 3. `docs/design/menubar-ux.md`, section "The list":
-   - Rewrite the "A row is a status dot and a title, on one line" bullet: still true for every row except Working rows, which carry a second, always-visible progress line (variant A of the stale-and-progress mock): a bar and `4/7 · ~6m left` / `2/5` / `~6m left` / `2m past ETA` / `3m elapsed`, or **Quiet 9m** first when stale. Say why it is worth breaking the rule (the owner wanted progress and liveness without opening anything) and that it costs height only for working sessions.
+   - Rewrite the "A row is a status dot and a title, on one line" bullet: still true for every row except Working rows, which carry a second, always-visible progress line: a bar and `4/7 · ~6m left` / `2/5` / `~6m left` / `2m past ETA` / `3m elapsed`, or **Quiet 9m** first when stale. Say why it is worth breaking the rule (the owner wanted progress and liveness without opening anything) and that it costs height only for working sessions.
    - Add a bullet for the hollow dot: a stale session's dot is a hollow ring in working blue; status stays Working; stale is a signal beside status, set when nothing has been written to the session's transcript or its subagents' transcripts for 5 minutes.
    - Add where progress comes from: the agent's own report through the `aydy:progress` skill (an ETA from before the current prompt is discarded), else the turn's TodoWrite checklist, else elapsed turn time.
    - Update the "Hover detail" bullet to list the new parts.
@@ -45,7 +45,7 @@ Durations via `src/utils/formatDuration.ts`. Rows that are not Working, or have 
 ## Gotchas
 
 - The detail is revealed only on hover; the new parts are hover-only and must not duplicate into the always-visible line beyond what 02_01 shows.
-- Existing `SessionRow.test.ts` expectations for detail text (`'Working Working time 1h 12m Longest turn 40m'` with `signals: null`) must stay green.
+- Existing expectations for detail text `'Working Working time 1h 12m Longest turn 40m'` with `signals: null` (`src/components/molecules/SessionRowDetail.test.ts:25` and `src/components/molecules/SessionRow.test.ts:92`) must stay green.
 - Copy is English; emphasise UI terms with bold in docs, never quotes (ui-conventions.md, Typography).
 
 ## Verification

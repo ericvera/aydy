@@ -20,7 +20,7 @@ The session model does no I/O and reads time only through the injected `Clock` a
 The shared rule (spec `## Design`, identical in the VS Code extension later):
 
 - `STALE_AFTER` = 5 minutes.
-- Activity = newest of: transcript written at (incl. subagent transcripts — supplied by a later task as one `Instant`), the session's last hook event (`Session::last_event_at`, `session.rs:91-93`), the accepted progress report's `reported_at`. Transcript written-at unknown → `quiet_for` is `None` and the session is never stale.
+- Activity = newest of: transcript written at (incl. subagent transcripts — supplied by a later task as one `Instant`), the session's last hook event (`Session::last_event_at`, `session.rs:88-90`), the accepted progress report's `reported_at`. Transcript written-at unknown → `quiet_for` is `None` and the session is never stale.
 - `quiet_for` = now − activity; `stale` = `quiet_for >= STALE_AFTER`.
 - A progress report is accepted iff `reported_at >= turn_started_at` (no turn start → accepted). A rejected report contributes nothing (not step, not ETA, not activity).
 - Step = accepted report's step (`StepSource::Agent`), else checklist (`StepSource::Checklist`).
@@ -29,7 +29,7 @@ The shared rule (spec `## Design`, identical in the VS Code extension later):
 - `turn_elapsed` = now − turn_started_at, or `None` without a turn start.
 - Signals exist only while `status() == Working`.
 
-Patterns: `SessionTiming` (`timing.rs:13-70`) for a small `Copy`/`Eq` state type with doc comments; `Session` setters such as `mark_present` (`session.rs:206-210`); test style in `session.rs:262+` (`minutes(n)` helper, `Instant::now()` base, one behaviour per test, descriptive snake-case names).
+Patterns: `SessionTiming` (`timing.rs:13-70`) for a small `Copy`/`Eq` state type with doc comments; `Session` setters such as `mark_present` (`session.rs:203-207`); test style in `session.rs:262+` (`minutes(n)` helper, `Instant::now()` base, one behaviour per test, descriptive snake-case names).
 
 ## Guides
 
@@ -58,6 +58,7 @@ None of the config's Skills & guides entries apply (no Vue, no popover layout).
 
 - Do not make stale a status or feed it into `settle`; the working clock and Unknown window must be unaffected.
 - `turn_started_at` is `None` after `end_turn`; a NeedsInput mid-turn keeps it, but signals are only produced while Working anyway.
+- The turn start is the spec's shared rule, and the VS Code extension mirrors exactly what `SessionTiming` does today (task 03_02 `nextTurnStart`): `UserPromptSubmit` and `SubagentsRunning` call `start_turn`, which keeps an open turn's start (`timing.rs:40-44`); `Stop` calls `end_turn`; `Notification` leaves it (`session.rs:111-144`). Do not change those semantics here.
 - `cargo clippy` runs in `Check`; avoid `as` casts that clippy flags — use `try_from(...).unwrap_or(...)`.
 - The new setters have no production caller until 01_03/01_04. They are `pub` on a `pub` type in a `pub mod`, so the dead-code lint does not fire; keep them `pub` rather than adding `#[allow(dead_code)]`.
 
@@ -74,4 +75,4 @@ None of the config's Skills & guides entries apply (no Vue, no popover layout).
   - ETA remaining counts down and goes negative past the ETA;
   - fraction from ETA, from step, and `None` with neither;
   - `Step::new` rejects `total == 0` and `done > total`.
-- Write tests in `session.rs`: `work_signals` is `None` for Done / NeedsInput / Unknown and `Some` while Working; `record_transcript` with an older instant does not move written-at backwards; recording progress or transcript does not change `last_event_at`.
+- Write tests in `session.rs`: after `UserPromptSubmit` then `SubagentsRunning` (Stop with subagents still running), a report written between the two is accepted and one written before the prompt is rejected (the turn start stays the prompt's); `work_signals` is `None` for Done / NeedsInput / Unknown and `Some` while Working; `record_transcript` with an older instant does not move written-at backwards; recording progress or transcript does not change `last_event_at`.

@@ -28,9 +28,20 @@ AYDY's popover is Vue 3 + TypeScript + UnoCSS with a strict design preset, dark 
 }
 ```
 
-The approved design is `.mise/mock/a-row-line.html` (rendered by `.mise/mock/mock.js` `row()` / `progressText()` and `.mise/mock/mock.css` `.meta`, `.bar`, `.dot.stale`). Open the mock HTML in a browser or read the JS/CSS. The owner chose variant A knowing it breaks the one-line-row rule for Working rows only; Done, Needs input and Unknown rows stay one line.
+The owner approved variant A of a mock that is not part of the repository; everything it showed is inlined here. The owner chose it knowing it breaks the one-line-row rule for Working rows only; Done, Needs input and Unknown rows stay one line.
 
-Line content (mock `row()` for variant A):
+What the approved mock drew (popover 320px wide, dark):
+
+- **Second line** under the title line of each Working row: flex, centred, 8px gap, 11px text in `neutral-5`, indented 16px so it starts under the title (8px dot + 8px gap).
+- **Bar**: 2px tall, `neutral-3` track, `neutral-6` fill, fully rounded, its fill width = the fraction. The mock drew it 64px wide; the strict spacing scale tops out at `w-8` = 48px, which the spec chose.
+- **Quiet Nm** on a stale row in `neutral-6` (one step brighter than the rest of the line), first on the line, with no bar.
+- **Hollow dot**: the 8px dot drawn as a ring in working blue (`status-working`) with a transparent centre.
+- Its example rows, which double as the visual check below:
+  - **At rest**: `Add transcript heartbeat` — solid working dot, bar at 12/(12+6) = 67%, `4/7 · ~6m left`; `Redraw tray icons` — hollow dot, `Quiet 9m` then `2/5`; `Write release notes` — solid dot, no bar, `3m elapsed`; `Fix checkout totals` (Needs input, unread), `Migrate Firestore rules` (Done), `Untitled session` (Unknown) — one line each.
+  - **Past its ETA**: the first row with a 20m turn and an ETA 2m overdue — bar full, `4/7 · 2m past ETA`; still not stale because the transcript is moving.
+  - **Nothing stale**: every dot solid; the second row reads bar at 40%, `2/5`.
+
+Line content:
 
 - **Not stale:** `[bar] <progress text>`; the bar only when `fractionPermille !== null`.
 - **Stale:** `**Quiet <formatDuration(quietMs)>**` (brighter, `text-neutral-6`) then `<progress text>`; no bar.
@@ -57,7 +68,7 @@ Existing patterns: `SessionRow.vue` (row layout `flex-col gap-1 px-5 py-2`, titl
 - Read `docs/design/ui-conventions.md` first. Spacing is non-linear (`w-8` = 48px, `h-1` = 2px, `pl-5` = 16px, `gap-3` = 8px); unknown tokens silently emit nothing. After building, check the generated CSS really contains rules for `border-status-working`, `w-8`, `h-1`, `pl-5`, `bg-neutral-3`, `bg-neutral-6`; if any new family is used, add it to the relevant sweep in `uno.config.test.ts`.
 - Status colour is reserved for the dot: the bar fill and **Quiet** text use neutrals, never a status colour.
 - The line is always visible on Working rows — it is not part of the hover reveal and gets no `group-hover` classes. Do not touch the hover detail's reveal classes (that is the anti-flicker mechanism, menubar-ux.md "The reveal moves nothing").
-- `SessionRow.test.ts` snapshots the whole row for a Done session (`shows a status dot and a title and nothing else`); it must stay unchanged, which proves non-Working rows are still one line. Its test name and doc comment should be adjusted to say "a row that is not working".
+- Two inline snapshots render rows whose line is not shown: `src/components/molecules/SessionRow.test.ts:24-30` (`shows a status dot and a title and nothing else`, a Done row) and `src/components/organisms/SessionList.test.ts:90-101` (snapshot at :91) (`draws the whole list`: a Done row and a Working row with `signals: null`). Vue's `v-if` leaves a `<!--v-if-->` comment where `SessionProgressLine` would be, right after the title line's closing `</span>` and before the detail `<span class="hidden invisible …">`. Update both snapshots by adding **exactly that comment** in each row and nothing else; any other difference means a non-Working row changed. Rename the SessionRow test to say "a row that is not working".
 - `lint` runs eslint + stylelint; no `<style>` block is needed.
 - The detail line's own content is task 02_02; leave `SessionRowDetail` alone here.
 
@@ -67,5 +78,5 @@ Existing patterns: `SessionRow.vue` (row layout `flex-col gap-1 px-5 py-2`, titl
 - New/updated tests:
   - `StatusDot.test.ts`: stale working dot renders the hollow ring classes and no `bg-status-working`; non-stale unchanged (existing inline snapshots stay green).
   - `SessionProgressLine.test.ts` (new): `4/7 · ~6m left` with a bar at the fraction; `2/5` alone; `~6m left` alone; `2m past ETA`; `3m elapsed` with no bar when there is neither step, eta nor fraction; stale renders `Quiet 9m` first, no bar, then the progress text.
-  - `SessionRow.test.ts`: a Done/needsInput row is unchanged (existing snapshot); a working row with signals renders the progress line; a working row with `signals: null` renders no line; a stale working row passes `stale` to the dot.
-- Substitute visual check: run the popover UI in a browser (`yarn dev`, or mount the components) at 320px and compare against `.mise/mock/a-row-line.html` "At rest" and "Past its ETA".
+  - `SessionRow.test.ts`: a Done/needsInput row is unchanged apart from the one `<!--v-if-->` comment (existing snapshot); `SessionList.test.ts` `draws the whole list` likewise gains only that comment per row; a working row with signals renders the progress line; a working row with `signals: null` renders no line; a stale working row passes `stale` to the dot.
+- Substitute visual check: run the popover UI in a browser (`yarn dev`, or mount the components) at 320px with sessions matching the **At rest** and **Past its ETA** examples above, and compare against those descriptions (line text, bar presence and fill, hollow dot, one-line non-Working rows).

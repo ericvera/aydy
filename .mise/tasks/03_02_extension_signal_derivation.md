@@ -14,21 +14,39 @@ Give the VS Code companion extension its own copy of the shared stale/progress r
 
 ## Background
 
-The AYDY Companion extension (`extension/`, TypeScript, tested with vitest from the repo root) reads the hook's status files under `~/Library/Application Support/app.aydy/` and derives each window's glance itself, by the same rule as the Rust app, so it works with the app closed (`extension/src/sessionState.ts`: `parseStatus` `:52-85`, `isWorking` `:157-159`, `windowGlance` `:166-172`, `tabTitle` `:174-183`; reads in `extension/src/sessionStore.ts`). This task mirrors the Rust signals added in tasks 01_01–01_04 (`src-tauri/src/session/signals.rs`, `src-tauri/src/discovery/transcript.rs` checklist and `last_activity`).
+The AYDY Companion extension (`extension/`, TypeScript, tested with vitest from the repo root) reads the hook's status files under `~/Library/Application Support/app.aydy/` and derives each window's glance itself, by the same rule as the Rust app, so it works with the app closed (`extension/src/sessionState.ts`: `parseStatus` `:52-85`, `isWorking` `:147-149`, `windowGlance` `:156-162`, `tabTitle` `:164-173`; reads in `extension/src/sessionStore.ts`). This task mirrors the Rust signals added in tasks 01_01–01_04 (`src-tauri/src/session/signals.rs`, `src-tauri/src/discovery/transcript.rs` checklist and `last_activity`).
 
 The shared rule (spec `## Design`) — implement it exactly:
 
 - `STALE_AFTER_MS = 5 * 60 * 1000`.
 - Activity = max of: transcript mtime; mtime of every `*.jsonl` under `<dirname(transcript)>/<sessionId>/subagents/` (recursive, depth ≤ 3); the status file's mtime (`eventAt`); the accepted progress report's mtime. Transcript unreadable/absent → quiet unknown → never stale.
 - Stale = working (`isWorking`) and now − activity ≥ `STALE_AFTER_MS`.
-- Turn start (extension) = `eventAt` when the status event is `UserPromptSubmit`; otherwise unknown.
-- Progress report accepted iff `reportedAt >= turnStart` (unknown turn start → accepted).
+- Turn start = when the open turn began, the same state machine as Rust's `SessionTiming` (`src-tauri/src/session/timing.rs:40-54`, driven by `apply_hook` in `src-tauri/src/session/session.rs:111-144`). The status file holds only the latest event, so the extension carries the value across passes with a pure step function `nextTurnStart(previous: number | null, status: SessionStatus): number | null`:
+  - `isWorking(status)` (`UserPromptSubmit`, or `Stop` with subagents running) → `previous ?? status.eventAt` (a turn already open keeps its start — Rust's `start_turn`);
+  - `Stop` with no subagents running → `null` (Rust's `end_turn`);
+  - anything else (`Notification`, `SessionStart`) → `previous`.
+    It is idempotent, so applying it on every pass to an unchanged status changes nothing. Example the old rule got wrong: prompt at 10:00, report at 10:02, Stop with subagents running at 10:05 → turn start stays 10:00 and the 10:02 report is accepted; a report from 09:55 (the previous turn) is rejected, as in Rust. With no previous value (extension just started mid-turn) a Stop-with-subagents status starts the turn at its own `eventAt`, which is also what Rust does when it first sees that event outside an open turn.
+- Progress report accepted iff `reportedAt >= turnStartedAt` (unknown turn start → accepted).
 - Step = accepted report's step, else the transcript checklist.
+- Checklist read rule: exactly the last `CHECKLIST_WINDOW_BYTES` = 256 KiB of the transcript (whole file when smaller), dropping a leading partial line when the window does not start at offset 0 — the same window and partial-line rule as Rust's `CHECKLIST_WINDOW` and `tail` (`src-tauri/src/discovery/transcript.rs`, task 01_02), so both surfaces see the same lines.
 - Checklist: newest non-sidechain assistant entry with a `tool_use` named `TodoWrite` (`message.content[]` element `{type:"tool_use", name:"TodoWrite", input:{todos:[{status}]}}`) after the newest genuine prompt; `done` = todos with `status === "completed"`, `total` = length; total 0 → none. Genuine prompt = `type: "user"`, not `isSidechain`, not `isMeta`, `message.content` a string or an array with no `type: "tool_result"` element. Scan the tail's lines newest-first; skip unparseable lines.
 - ETA remaining = `etaMs − (now − reportedAt)`, negative = overdue.
 - Progress file: `app.aydy/progress/<id>.json`, body `{"etaSeconds":N,"step":{"done":D,"total":T}}` (`step` optional), mtime = report time; skip invalid id stems, bad JSON, missing/negative/non-integer `etaSeconds`; drop an invalid step (`total < 1`, `done > total`, non-integers) but keep the report; cap eta at 24 h.
 
-Title format (decision 4/5 and `.mise/mock/b-vscode-title.html`): `◐ 4/7 · ~6m aydy · branch`, `◐ 2/5 …`, `◐ ~6m …`, `◐ 3m …` (elapsed), `◌ quiet 9m …`; overdue `◐ 2m over …`. Title durations are whole minutes so the workspace file is not rewritten every poll: `< 60 s` → `<1m`, `< 1 h` → `${floor(min)}m`, else `${h}h ${m}m`. Nothing to say (no step, eta or known turn start, not stale) → no signal, plain `◐`.
+Title format (decisions 4/5; the approved mock is not part of the repository, so its titles are inlined). Glyph, one space, signal text, one space, then the existing label (`aydy · feat/stale-and-progress-signals`):
+
+| State                                | Title                                                |
+| ------------------------------------ | ---------------------------------------------------- |
+| Working, nothing to say (today)      | `◐ aydy · feat/stale-and-progress-signals`           |
+| Checklist and ETA                    | `◐ 4/7 · ~6m aydy · feat/stale-and-progress-signals` |
+| Checklist only                       | `◐ 2/5 aydy · feat/stale-and-progress-signals`       |
+| ETA only                             | `◐ ~6m aydy · …`                                     |
+| Nothing reported (elapsed turn time) | `◐ 3m aydy · …`                                      |
+| Past the ETA                         | `◐ 2m over aydy · …`                                 |
+| Stale (wins over progress)           | `◌ quiet 9m aydy · feat/stale-and-progress-signals`  |
+| Unread (unchanged, wins over both)   | `● 1 okven · main`                                   |
+
+`◌` is U+25CC DOTTED CIRCLE; `◐` and `●` are the existing glyphs. Title durations are whole minutes so the workspace file is not rewritten every poll: `< 60 s` → `<1m`, `< 1 h` → `${floor(min)}m`, else `${h}h ${m}m`. Nothing to say (no step, eta or known turn start, not stale) → no signal, plain `◐`.
 
 Most urgent in a window (decision 5): stale first (longest quiet wins), then the shortest ETA remaining (overdue counts as shortest), then the highest step fraction, then the longest elapsed; ties keep input order.
 
@@ -47,15 +65,15 @@ None of the config's Skills & guides entries apply.
    - `tabTitle`: unread branches unchanged; else if `glance.signal` → `${signal.stale ? '◌' : '◐'} ${signal.text} ${label}`; else today's `◐`/`○`.
      (This file is allowed more than one export — it already has many; keep the existing style.)
 3. `workSignal.ts`:
-   - `STALE_AFTER_MS`, `interface Step { done: number; total: number }`, `interface ProgressReport { etaMs: number; step: Step | null; reportedAt: number }`, `parseProgress(text: string, mtimeMs: number): ProgressReport | null`, `checklistFromTail(text: string): Step | null`.
-   - `interface SessionActivity { status: SessionStatus; transcriptWrittenAt: number | null; checklist: Step | null; progress: ProgressReport | null }`.
+   - `STALE_AFTER_MS`, `CHECKLIST_WINDOW_BYTES = 256 * 1024` (doc comment: must equal Rust's `CHECKLIST_WINDOW`), `nextTurnStart(previous, status)`, `interface Step { done: number; total: number }`, `interface ProgressReport { etaMs: number; step: Step | null; reportedAt: number }`, `parseProgress(text: string, mtimeMs: number): ProgressReport | null`, `checklistFromTail(text: string): Step | null`.
+   - `interface SessionActivity { status: SessionStatus; turnStartedAt: number | null; transcriptWrittenAt: number | null; checklist: Step | null; progress: ProgressReport | null }` — `turnStartedAt` is the caller's running `nextTurnStart` value (task 03_03 keeps it per session).
    - `interface SessionSignal { stale: boolean; quietMs: number | null; elapsedMs: number | null; step: Step | null; etaRemainingMs: number | null }`; `sessionSignal(activity, now): SessionSignal | null` (null unless `isWorking(status)`).
    - `mostUrgent(signals: readonly SessionSignal[]): SessionSignal | null`.
    - `titleSignal(signal: SessionSignal): TitleSignal | null` and `formatMinutes(ms)`.
 4. `sessionStore.ts`:
    - `StoreDirs` gains `progress?: string`.
    - `readProgress({ progress = progressDir() } = {}): Promise<Map<string, ProgressReport>>` (read + stat each file, `parseProgress`).
-   - `transcriptActivity(transcriptPath: string, sessionId: string, cache: Map<string, TailCache>): Promise<{ writtenAt: number | null; checklist: Step | null }>` — stat the transcript (missing → `{ writtenAt: null, checklist: null }`), walk the subagents dir for the newest `.jsonl` mtime, and read the last 256 KiB (dropping a leading partial line when not at offset 0) for `checklistFromTail` only when the transcript's size or mtime differs from the cached entry.
+   - `transcriptActivity(transcriptPath: string, sessionId: string, cache: Map<string, TailCache>): Promise<{ writtenAt: number | null; checklist: Step | null }>` — stat the transcript (missing → `{ writtenAt: null, checklist: null }`), walk the subagents dir for the newest `.jsonl` mtime, and read the last `CHECKLIST_WINDOW_BYTES` (dropping a leading partial line when not at offset 0) for `checklistFromTail` only when the transcript's size or mtime differs from the cached entry.
    - `pruneStale` also prunes the progress dir with the same 7-day rule.
 
 ## Gotchas
@@ -69,6 +87,6 @@ None of the config's Skills & guides entries apply.
 
 - Run `yarn build-tsc`, `yarn lint`, `yarn test`.
 - New tests:
-  - `workSignal.test.ts`: every bullet of the shared rule (stale at exactly 5 min, not at 4:59; unknown transcript never stale; status event newer than the transcript resets quiet; subagent activity counted via `transcriptWrittenAt` input; report before the turn start ignored; agent step over checklist; ETA countdown and overdue); `checklistFromTail` cases (newest TodoWrite after the last genuine prompt; tool_result entries do not end the turn; `isMeta` ignored; sidechain ignored; before the prompt → null; empty todos → null; unparseable lines skipped); `parseProgress` validation and 24 h cap; `mostUrgent` ordering (stale beats ETA, longest quiet among stale, shortest ETA with overdue first, then fraction, then elapsed); `titleSignal` texts `4/7 · ~6m`, `2/5`, `~6m`, `3m`, `2m over`, `quiet 9m`, `<1m`, `1h 10m`, and `null` when there is nothing to say.
+  - `workSignal.test.ts`: `nextTurnStart` (prompt sets it; a second prompt or a Stop-with-subagents keeps it; Stop without subagents clears it; Notification keeps it; idempotent on repeat; Stop-with-subagents from `null` starts at its `eventAt`); a report written after the prompt but before a Stop-with-subagents is accepted and one from before the prompt rejected (the Rust 01_01 session test, mirrored); every bullet of the shared rule (stale at exactly 5 min, not at 4:59; unknown transcript never stale; status event newer than the transcript resets quiet; subagent activity counted via `transcriptWrittenAt` input; report before the turn start ignored; agent step over checklist; ETA countdown and overdue); `checklistFromTail` cases (newest TodoWrite after the last genuine prompt; tool_result entries do not end the turn; `isMeta` ignored; sidechain ignored; before the prompt → null; empty todos → null; unparseable lines skipped); `parseProgress` validation and 24 h cap; `mostUrgent` ordering (stale beats ETA, longest quiet among stale, shortest ETA with overdue first, then fraction, then elapsed); `titleSignal` texts `4/7 · ~6m`, `2/5`, `~6m`, `3m`, `2m over`, `quiet 9m`, `<1m`, `1h 10m`, and `null` when there is nothing to say.
   - `sessionState.test.ts`: `parseStatus` reads `transcript_path`; `tabTitle` renders `◐ 4/7 · ~6m label`, `◌ quiet 9m label`, unread still wins over a signal.
-  - `sessionStore.test.ts`: `readProgress` reads valid files and skips invalid ones; `transcriptActivity` picks the newest of transcript and nested subagent `.jsonl` mtimes, returns nulls for a missing transcript, reads the checklist, and does not re-read an unchanged transcript (assert via the cache); `pruneStale` prunes old progress files of dead sessions.
+  - `sessionStore.test.ts`: `readProgress` reads valid files and skips invalid ones; `transcriptActivity` picks the newest of transcript and nested subagent `.jsonl` mtimes, returns nulls for a missing transcript, reads the checklist from a TodoWrite between 32 KiB and 256 KiB from the end, returns `null` checklist for one more than 256 KiB from the end, and does not re-read an unchanged transcript (assert via the cache); `pruneStale` prunes old progress files of dead sessions.
