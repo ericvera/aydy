@@ -14,7 +14,7 @@ AYDY (Tauri v2 menu bar app, Rust core in `src-tauri/`) reads each live Claude C
 
 Rule from the spec (shared with the VS Code extension, which mirrors it in task 03_02 — keep it exactly):
 
-- **Activity** (`last_activity`): the newest mtime among the transcript itself and every `*.jsonl` file under `<transcript's parent dir>/<session_id>/subagents/`, searched recursively to depth 3 (real layout on this machine: `<id>/subagents/agent-*.jsonl` and `<id>/subagents/workflows/wf_*/agent-*.jsonl`). Subagents write there, not to the main transcript, so without this a session busy in a subagent reads as quiet. Missing transcript → `None`. Unreadable subagent dirs are ignored.
+- **Activity** (`last_activity`): the newest mtime among the transcript itself and every `*.jsonl` file under `<transcript's parent dir>/<session_id>/subagents/`, searched recursively to at most 3 path parts below `subagents/`: `subagents/agent-x.jsonl` is 1 part and counts, `subagents/workflows/wf_1/agent-y.jsonl` is 3 parts and counts, `subagents/a/b/c/agent-z.jsonl` is 4 parts and is ignored (real layout on this machine: `<id>/subagents/agent-*.jsonl` and `<id>/subagents/workflows/wf_*/agent-*.jsonl`). Subagents write there, not to the main transcript, so without this a session busy in a subagent reads as quiet. Missing transcript → `None`. Unreadable subagent dirs are ignored.
 
 Nothing else in this file changes: `TranscriptFacts`, `read_within`, the status windows and the stamp cache stay as they are. Task 01_03 calls `last_activity` from the reconciler's scan.
 
@@ -24,7 +24,7 @@ None of the config's Skills & guides entries apply.
 
 ## Implementation details
 
-1. Add `pub fn last_activity(transcript: &Path, session_id: &str) -> Option<SystemTime>`: `fs::metadata(transcript)?.modified()`, then walk `transcript.parent()?.join(session_id).join("subagents")` with a small recursive helper bounded at depth 3, taking the max mtime of files whose extension is `jsonl`. No caching (it is a handful of stats per scan, and the stamp cache watches only the main file).
+1. Add `pub fn last_activity(transcript: &Path, session_id: &str) -> Option<SystemTime>`: `fs::metadata(transcript)?.modified()`, then walk `transcript.parent()?.join(session_id).join("subagents")` with a small recursive helper that descends at most 3 path parts below `subagents/` (files directly in `subagents/` are 1 part; `subagents/workflows/wf_1/agent-y.jsonl` is 3 parts; `subagents/a/b/c/agent-z.jsonl` is 4 parts and is not read), taking the max mtime of files whose extension is `jsonl`. No caching (it is a handful of stats per scan, and the stamp cache watches only the main file).
 2. Doc comment in the file's existing voice: explain _why_ subagent files count (subagents and workflow agents write there, so a session busy in a subagent would otherwise read as quiet) and why it is uncached.
 
 ## Gotchas
@@ -36,4 +36,4 @@ None of the config's Skills & guides entries apply.
 ## Verification
 
 - Run `cargo test` and `cargo clippy --all-targets -- -D warnings` from `src-tauri/`.
-- New tests in `transcript.rs`, `last_activity`: transcript only; a newer `subagents/agent-x.jsonl` wins; a newer `subagents/workflows/wf_1/agent-y.jsonl` wins; an older subagent file does not; non-`.jsonl` files are ignored; a file deeper than depth 3 is ignored; missing transcript → `None`. Set mtimes explicitly with `File::set_modified` (pattern in `src-tauri/src/discovery/status_files.rs` tests, `write_status`).
+- New tests in `transcript.rs`, `last_activity`: transcript only; a newer `subagents/agent-x.jsonl` wins; a newer `subagents/workflows/wf_1/agent-y.jsonl` wins; an older subagent file does not; non-`.jsonl` files are ignored; a newer `subagents/a/b/c/agent-z.jsonl` (4 path parts below `subagents/`) is ignored; missing transcript → `None`. Set mtimes explicitly with `File::set_modified` (pattern in `src-tauri/src/discovery/status_files.rs` tests, `write_status`).

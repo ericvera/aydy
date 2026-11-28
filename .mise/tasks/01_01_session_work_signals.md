@@ -41,10 +41,11 @@ None of the config's Skills & guides entries apply (no Vue, no popover layout).
 2. `signals.rs` (module doc comment explaining stale is beside status, not a status):
    - `pub const STALE_AFTER: Duration = Duration::from_secs(5 * 60);`
    - `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct Step { pub done: u32, pub total: u32 }` with `pub fn new(done, total) -> Option<Step>` returning `None` unless `total >= 1 && done <= total`.
-   - `pub struct ProgressReport { pub reported_at: Instant, pub eta: Duration, pub step: Option<Step> }`.
-   - `pub struct Eta { pub remaining_ms: i64, pub reported_ago: Duration }`.
-   - `pub struct WorkSignals { pub stale: bool, pub quiet_for: Option<Duration>, pub turn_elapsed: Option<Duration>, pub step: Option<Step>, pub eta: Option<Eta>, pub fraction_permille: Option<u16> }`.
-   - `pub struct SignalInputs { pub turn_started_at: Option<Instant>, pub last_event_at: Instant, pub transcript_written_at: Option<Instant>, pub progress: Option<ProgressReport> }`.
+   - `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct ProgressReport { pub reported_at: Instant, pub eta: Duration, pub step: Option<Step> }`.
+   - `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct Eta { pub remaining_ms: i64, pub reported_ago: Duration }`.
+   - `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct WorkSignals { pub stale: bool, pub quiet_for: Option<Duration>, pub turn_elapsed: Option<Duration>, pub step: Option<Step>, pub eta: Option<Eta>, pub fraction_permille: Option<u16> }`.
+   - `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct SignalInputs { pub turn_started_at: Option<Instant>, pub last_event_at: Instant, pub transcript_written_at: Option<Instant>, pub progress: Option<ProgressReport> }`.
+   - Every type above derives exactly `Debug, Clone, Copy, PartialEq, Eq` (all fields are `Copy`; task 01_03 compares `WorkSignals` and `Eta` in snapshots and needs `PartialEq, Eq`).
    - `pub fn derive(inputs: SignalInputs, now: Instant) -> WorkSignals` implementing the rule. Use `saturating_duration_since` everywhere; convert durations to i64 ms saturating.
 3. `mod.rs`: `pub mod signals;`.
 4. `session.rs`: private fields `transcript_written_at: Option<Instant>`, `progress: Option<ProgressReport>` (initialised `None` in `new`). Public methods:

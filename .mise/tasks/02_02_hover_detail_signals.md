@@ -35,7 +35,9 @@ Durations via `src/utils/formatDuration.ts`. Rows that are not Working, or have 
 
 1. `SessionRowDetail.vue`: new prop `signals: WorkSignals | null`. Build the list of extra parts in a `computed` (only when `status === 'working'` and `signals !== null`) and render them between the status text and `Working time`, each in its own `<span>` like the existing parts (the container is `flex-wrap gap-3`). Keep the root element's classes byte-identical.
 2. `SessionRow.vue`: pass `:signals="props.session.signals"` to `SessionRowDetail`.
-3. `docs/design/menubar-ux.md`, section "The list":
+3. `docs/design/menubar-ux.md`:
+   - Line 128, the popover layout item **Body** — `the grouped session list, one line per session.`: rewrite so it no longer claims one line per session, e.g. `the grouped session list, one line per session, plus a progress line under each Working row.`
+   - Section "The list":
    - Rewrite the "A row is a status dot and a title, on one line" bullet: still true for every row except Working rows, which carry a second, always-visible progress line: a bar and `4/7 · ~6m left` / `~6m left` / `2m past ETA` / `3m elapsed`, or **Quiet 9m** first when stale. Say why it is worth breaking the rule (the owner wanted progress and liveness without opening anything) and that it costs height only for working sessions.
    - Add a bullet for the hollow dot: a stale session's dot is a hollow ring in working blue; status stays Working; stale is a signal beside status, set when nothing has been written to the session's transcript or its subagents' transcripts for 5 minutes.
    - Add where progress comes from: only the agent's own report through the `aydy:progress` skill (an ETA from before the current prompt is discarded); without one the line shows the turn's elapsed time. AYDY does not read TodoWrite or task lists.
