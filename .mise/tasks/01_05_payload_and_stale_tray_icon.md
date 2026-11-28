@@ -15,7 +15,7 @@ Send each session's work signals to the popover, and give the menu bar icon a fi
 
 AYDY (Tauri v2 menu bar app) pushes a `SnapshotPayload` to the popover over a `tauri::ipc::Channel` every 100 ms when it changed (`snapshot_channel.rs:1-11`, `SessionPayload` `:80-112`, durations as whole ms via `milliseconds` `:180-183`). The same observation derives the tray icon (`tray/icon.rs`, `indication` `:53-84`). Icons are macOS template PNGs, 36×36 RGBA, black plus alpha, told apart by shape only (`docs/design/menubar-ux.md`, "Why shape and not colour").
 
-Prior tasks produced `SessionSnapshot.signals: Option<WorkSignals>` (`src-tauri/src/session/registry.rs`) where `WorkSignals { stale, quiet_for: Option<Duration>, turn_elapsed: Option<Duration>, step: Option<(Step, StepSource)>, eta: Option<Eta { remaining_ms: i64, reported_ago: Duration }>, fraction_permille: Option<u16> }` (`src-tauri/src/session/signals.rs`).
+Prior tasks produced `SessionSnapshot.signals: Option<WorkSignals>` (`src-tauri/src/session/registry.rs`) where `WorkSignals { stale, quiet_for: Option<Duration>, turn_elapsed: Option<Duration>, step: Option<Step { done, total }>, eta: Option<Eta { remaining_ms: i64, reported_ago: Duration }>, fraction_permille: Option<u16> }` (`src-tauri/src/session/signals.rs`).
 
 Decisions reaching this task (owner-approved, `.mise/goals.md` decision 4; the approved mock is not part of the repository, so everything it showed is inlined here):
 
@@ -31,8 +31,7 @@ Decisions reaching this task (owner-approved, `.mise/goals.md` decision 4; the a
 ## Implementation details
 
 1. `snapshot_channel.rs`:
-   - `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)] #[serde(rename_all = "camelCase")] pub enum StepSourcePayload { Agent, Checklist }`.
-   - `StepPayload { done: u32, total: u32, source: StepSourcePayload }`, `EtaPayload { remaining_ms: i64, reported_ago_ms: u64 }`, `SignalsPayload { stale: bool, quiet_ms: Option<u64>, turn_elapsed_ms: Option<u64>, step: Option<StepPayload>, eta: Option<EtaPayload>, fraction_permille: Option<u16> }`, all camelCase, `From<&WorkSignals>`.
+   - `StepPayload { done: u32, total: u32 }` (step comes only from agent reports, so it carries no source), `EtaPayload { remaining_ms: i64, reported_ago_ms: u64 }`, `SignalsPayload { stale: bool, quiet_ms: Option<u64>, turn_elapsed_ms: Option<u64>, step: Option<StepPayload>, eta: Option<EtaPayload>, fraction_permille: Option<u16> }`, all camelCase, `From<&WorkSignals>`.
    - `SessionPayload` gains `pub signals: Option<SignalsPayload>`. `None` serialises as `null` (no `skip_serializing_if`), matching the other optional fields.
 2. `tray/icon.rs`:
    - `IconState::Stale` between `SomethingNew` and `Working`, doc comment: a working session has gone quiet; ranks below anything unread because a stuck session matters less than one already waiting on you.
@@ -53,6 +52,6 @@ Decisions reaching this task (owner-approved, `.mise/goals.md` decision 4; the a
 
 - Run `cargo test` and `cargo clippy --all-targets -- -D warnings` from `src-tauri/`.
 - New tests:
-  - `snapshot_channel.rs`: a working session with signals serialises to JSON with `signals.stale`, `quietMs`, `turnElapsedMs`, `step.source == "agent"`, `eta.remainingMs` (negative allowed) and `fractionPermille`; a Done session serialises `"signals": null`.
+  - `snapshot_channel.rs`: a working session with signals serialises to JSON with `signals.stale`, `quietMs`, `turnElapsedMs`, `step.done`/`step.total`, `eta.remainingMs` (negative allowed) and `fractionPermille`; a Done session serialises `"signals": null`.
   - `tray/icon.rs`: a stale working session (read) shows Stale with count = stale sessions, not working sessions; any unread session outranks Stale; a working session that is not stale still shows Working; Stale's image is distinct from every other state's.
 - Substitute check for the icon artwork: Read `src-tauri/icons/tray/stale.png` and confirm the dashed right half and solid left half, matching the D1 SVG above (dashes on the right half only, roughly five gaps visible, symmetric about the horizontal axis).

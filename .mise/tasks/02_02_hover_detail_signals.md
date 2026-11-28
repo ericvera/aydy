@@ -2,7 +2,7 @@
 
 ## Goal
 
-A Working row's hover detail explains its signals: what quiet means when stale, how long this turn has run, and where the progress came from. Record the new row behaviour in the design doc.
+A Working row's hover detail explains its signals: what quiet means when stale, how long this turn has run, and how long ago the agent reported its ETA (or that it has not). Record the new row behaviour in the design doc.
 
 ## Files to modify/create
 
@@ -14,14 +14,14 @@ A Working row's hover detail explains its signals: what quiet means when stale, 
 
 AYDY's popover (Vue 3 + UnoCSS strict preset, `src/`) reveals a detail line under each row on hover with pure CSS (`SessionRowDetail.vue`, its long doc comment explains the anti-flicker `group/list` + `group/row` mechanism — do not change the reveal classes). Today it shows `Status · Working time X · Longest turn Y`.
 
-Task 02_01 added `Session.signals: WorkSignals | null` (`src/types/WorkSignals.ts`: `stale`, `quietMs`, `turnElapsedMs`, `step {done,total,source}`, `eta {remainingMs, reportedAgoMs}`, `fractionPermille`; null unless Working), the always-visible `SessionProgressLine` under Working rows, and the hollow stale dot.
+Task 02_01 added `Session.signals: WorkSignals | null` (`src/types/WorkSignals.ts`: `stale`, `quietMs`, `turnElapsedMs`, `step {done,total}` (only from an agent report), `eta {remainingMs, reportedAgoMs}`, `fractionPermille`; null unless Working), the always-visible `SessionProgressLine` under Working rows, and the hollow stale dot.
 
-Approved design (variant A of a mock that is not part of the repository; its two hover frames are inlined here). With the pointer on a working row the detail line read `Working | This turn 12m | ETA reported 1m ago | Working time 38m | Longest turn 14m`; on the stale row it read `Working | Quiet 9m · nothing written to the transcript | This turn 31m | No ETA reported · checklist only | Working time 52m | Longest turn 14m` (`|` marks part boundaries for reading only and is not rendered; the `·` inside a part is literal copy; in the UI each part is its own `<span>` in the `gap-3` flex row, 11px `neutral-5`, the quiet part one step brighter in `neutral-6`). Order of parts for a Working row with signals:
+Approved design (variant A of a mock that is not part of the repository; its two hover frames are inlined here). With the pointer on a working row the detail line read `Working | This turn 12m | ETA reported 1m ago | Working time 38m | Longest turn 14m`; on the stale row it read `Working | Quiet 9m · nothing written to the transcript | This turn 31m | No ETA reported | Working time 52m | Longest turn 14m` (the mock's stale row read `No ETA reported · checklist only`; the owner dropped the checklist fallback, goals decision 10, so it now reads `No ETA reported`; `|` marks part boundaries for reading only and is not rendered; the `·` inside a part is literal copy; in the UI each part is its own `<span>` in the `gap-3` flex row, 11px `neutral-5`, the quiet part one step brighter in `neutral-6`). Order of parts for a Working row with signals:
 
 1. status text (`Working`) — existing;
 2. when stale: `Quiet <quiet> · nothing written to the transcript` (rendered `text-neutral-6`, a neutral — never a status colour);
 3. `This turn <turnElapsed>` (omit if `turnElapsedMs` is null);
-4. one of: `ETA reported <reportedAgo> ago` when `eta`; else `No ETA reported · checklist only` when `step` (any source); else `No ETA or checklist`;
+4. `ETA reported <reportedAgo> ago` when `eta`, else `No ETA reported`;
 5. `Working time …`, `Longest turn …` — existing.
 
 Durations via `src/utils/formatDuration.ts`. Rows that are not Working, or have `signals: null`, render exactly as today.
@@ -36,9 +36,9 @@ Durations via `src/utils/formatDuration.ts`. Rows that are not Working, or have 
 1. `SessionRowDetail.vue`: new prop `signals: WorkSignals | null`. Build the list of extra parts in a `computed` (only when `status === 'working'` and `signals !== null`) and render them between the status text and `Working time`, each in its own `<span>` like the existing parts (the container is `flex-wrap gap-3`). Keep the root element's classes byte-identical.
 2. `SessionRow.vue`: pass `:signals="props.session.signals"` to `SessionRowDetail`.
 3. `docs/design/menubar-ux.md`, section "The list":
-   - Rewrite the "A row is a status dot and a title, on one line" bullet: still true for every row except Working rows, which carry a second, always-visible progress line: a bar and `4/7 · ~6m left` / `2/5` / `~6m left` / `2m past ETA` / `3m elapsed`, or **Quiet 9m** first when stale. Say why it is worth breaking the rule (the owner wanted progress and liveness without opening anything) and that it costs height only for working sessions.
+   - Rewrite the "A row is a status dot and a title, on one line" bullet: still true for every row except Working rows, which carry a second, always-visible progress line: a bar and `4/7 · ~6m left` / `~6m left` / `2m past ETA` / `3m elapsed`, or **Quiet 9m** first when stale. Say why it is worth breaking the rule (the owner wanted progress and liveness without opening anything) and that it costs height only for working sessions.
    - Add a bullet for the hollow dot: a stale session's dot is a hollow ring in working blue; status stays Working; stale is a signal beside status, set when nothing has been written to the session's transcript or its subagents' transcripts for 5 minutes.
-   - Add where progress comes from: the agent's own report through the `aydy:progress` skill (an ETA from before the current prompt is discarded), else the turn's TodoWrite checklist, else elapsed turn time.
+   - Add where progress comes from: only the agent's own report through the `aydy:progress` skill (an ETA from before the current prompt is discarded); without one the line shows the turn's elapsed time. AYDY does not read TodoWrite or task lists.
    - Update the "Hover detail" bullet to list the new parts.
    - Update "Where the numbers come from" to mention the progress files (`progress/`, written by the plugin's `aydy-progress`) and the transcript activity read on the 25 s scan.
 
@@ -53,8 +53,8 @@ Durations via `src/utils/formatDuration.ts`. Rows that are not Working, or have 
 - Run `yarn build-tsc`, `yarn lint`, `yarn test`.
 - New tests in `SessionRowDetail.test.ts`:
   - working, not stale, with ETA: `Working This turn 12m ETA reported 1m ago Working time 38m Longest turn 14m`;
-  - working, stale, checklist only: includes `Quiet 9m · nothing written to the transcript` right after `Working`, then `This turn 31m No ETA reported · checklist only …`;
-  - working with neither: `No ETA or checklist`;
+  - working, stale, no report: includes `Quiet 9m · nothing written to the transcript` right after `Working`, then `This turn 31m No ETA reported …`;
+  - working, not stale, no report: `Working This turn 3m No ETA reported Working time …`;
   - done row with `signals: null`: unchanged text;
   - the root element's classes are unchanged (reveal mechanism intact).
 - `SessionRow.test.ts`: a working row passes its signals through to the detail.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Each VS Code window's title shows its most urgent working session's signal — `◐ 4/7 · ~6m`, `◐ 2/5`, `◐ 3m`, or `◌ quiet 9m` — computed by the window tracker on every pass (variant B of the approved mock).
+Each VS Code window's title shows its most urgent working session's signal — `◐ 4/7 · ~6m`, `◐ ~6m`, `◐ 3m`, or `◌ quiet 9m` — computed by the window tracker on every pass (variant B of the approved mock).
 
 ## Files to modify/create
 
@@ -14,9 +14,9 @@ Each VS Code window's title shows its most urgent working session's signal — `
 
 The AYDY Companion extension keeps each window's title through its generated `.code-workspace` file: `WindowTracker` (`extension/src/windowTracker.ts`) reads the status/seen/window files on every change and every 5 s (`TRACKER_POLL_MS`), works out which sessions this window owns (`pass`, `:203-246`), and calls `onGlance` when the glance changed; `extension.ts` (`activate`, `:492-541`; `writeTitle`, `:104-115`) turns the glance into a title with `tabTitle` and writes it with `setWorkspaceTitle` (which skips the write when the title is unchanged).
 
-Task 03_02 produced, in `extension/src/workSignal.ts`: `nextTurnStart(previous, status)` (the turn-start state machine shared with Rust's `SessionTiming`; idempotent), `sessionSignal(activity, now)` (`SessionActivity.turnStartedAt` is the caller's running turn start), `mostUrgent(signals)`, `titleSignal(signal)`, `SessionActivity`, `ProgressReport`; in `extension/src/sessionStore.ts`: `readProgress(dirs)`, `transcriptActivity(transcriptPath, sessionId, cache)`; in `extension/src/sessionState.ts`: `SessionStatus.transcriptPath`, `WindowGlance.signal: TitleSignal | null`, `windowGlance(statuses, seen, signal)`, and `tabTitle` already rendering a signal; in `extension/src/aydyPaths.ts`: `progressDir()`.
+Task 03_02 produced, in `extension/src/workSignal.ts`: `nextTurnStart(previous, status)` (the turn-start state machine shared with Rust's `SessionTiming`; idempotent), `sessionSignal(activity, now)` (`SessionActivity.turnStartedAt` is the caller's running turn start), `mostUrgent(signals)`, `titleSignal(signal)`, `SessionActivity`, `ProgressReport`; in `extension/src/sessionStore.ts`: `readProgress(dirs)`, `transcriptActivity(transcriptPath, sessionId)` (newest write time in ms, or `null`; stats only); in `extension/src/sessionState.ts`: `SessionStatus.transcriptPath`, `WindowGlance.signal: TitleSignal | null`, `windowGlance(statuses, seen, signal)`, and `tabTitle` already rendering a signal; in `extension/src/aydyPaths.ts`: `progressDir()`.
 
-Owner decisions: the title shows the most urgent working session — stale first, then the shortest ETA (`mostUrgent` encodes the full order); unread still takes the slot (`● 1 okven · main`), exactly as today. Approved titles (glyph, signal text, then the existing label): `◐ 4/7 · ~6m aydy · feat/x`, `◐ 2/5 aydy · feat/x`, `◐ 3m aydy · feat/x` (elapsed), `◌ quiet 9m aydy · feat/x` (stale, U+25CC), and plain `◐ aydy · feat/x` when there is nothing to say; `titleSignal` (03_02) already produces the text.
+Owner decisions: the title shows the most urgent working session — stale first, then the shortest ETA (`mostUrgent` encodes the full order); unread still takes the slot (`● 1 okven · main`), exactly as today. Approved titles (glyph, signal text, then the existing label): `◐ 4/7 · ~6m aydy · feat/x`, `◐ ~6m aydy · feat/x`, `◐ 3m aydy · feat/x` (elapsed, no report), `◌ quiet 9m aydy · feat/x` (stale, U+25CC), and plain `◐ aydy · feat/x` when there is nothing to say; `titleSignal` (03_02) already produces the text.
 
 ## Guides
 
@@ -26,19 +26,19 @@ Owner decisions: the title shows the most urgent working session — stale first
 
 1. `windowTracker.ts`:
    - `TrackerDirs` gains `progress`; `defaultDirs` uses `progressDir()`.
-   - `TrackerStore` gains `readProgress: () => Promise<Map<string, ProgressReport>>` and `transcriptActivity: (transcriptPath: string, sessionId: string) => Promise<{ writtenAt: number | null; checklist: Step | null }>`; `defaultStore` binds them (the tail cache is a `Map` owned by the default store closure).
+   - `TrackerStore` gains `readProgress: () => Promise<Map<string, ProgressReport>>` and `transcriptActivity: (transcriptPath: string, sessionId: string) => Promise<number | null>` (newest write time); `defaultStore` binds them.
    - `start()` watches the progress dir along with the others (create it with `mkdir -p` like them).
    - `WindowTracker` keeps `private readonly turnStarts = new Map<string, number | null>()`. In `pass()`, after ownership, for **every** owned status (working or not) set `turnStarts.set(id, nextTurnStart(turnStarts.get(id) ?? null, status))`, so a Stop clears the value; delete entries whose session is no longer owned.
    - Then for each owned status where `isWorking(status)`, build a `SessionActivity` (with `turnStartedAt` from `turnStarts`) (`transcriptActivity` only when `transcriptPath !== null`, else nulls; progress from the map), compute `sessionSignal(activity, Date.now())`, then `titleSignal(mostUrgent(signals))` (null-safe), and pass it as the third argument to `windowGlance`.
    - The change check compares `unread`, `working`, and the signal (`stale` and `text`), so a title changes when its text changes and not otherwise.
    - Read failures for one session's transcript cost that session's activity only (catch per session), never the pass.
 2. `extension.ts`: no logic change beyond what the compiler needs — `writeTitle` already uses `tabTitle(glance, …)`; confirm the initial `glance` literal carries `signal: null` (added in 03_02).
-3. `extension/README.md`: in "What it does", describe the title signals (glyphs, what each text means, stale = nothing written by the session or its subagents for 5 minutes, the most-urgent rule, that progress comes from the `aydy:progress` plugin skill in `plugin/`, then TodoWrite, then elapsed time), and add `progress/` to the list of files under `app.aydy/` it reads and prunes.
+3. `extension/README.md`: in "What it does", describe the title signals (glyphs, what each text means, stale = nothing written by the session or its subagents for 5 minutes, the most-urgent rule, that progress comes from only the `aydy:progress` plugin skill in `plugin/`, else elapsed turn time; TodoWrite is not read), and add `progress/` to the list of files under `app.aydy/` it reads and prunes.
 
 ## Gotchas
 
 - Title texts are minute-granular by design (03_02), so with a 5 s poll the workspace file is rewritten at most about once a minute per changing session; do not add a faster poll.
-- Keep the pass bounded: a stat walk and at most one tail read per owned working session per pass, and the tail read only when the transcript changed (the store's cache).
+- Keep the pass bounded: one stat walk (transcript + subagents dir) per owned working session per pass; no transcript content is read.
 - `windowTracker.test.ts` injects a fake `store` and `watchDir`; extend the fake with the two new methods and keep existing tests green.
 - Do not compute signals for sessions this window does not own, or for non-working sessions (but do run `nextTurnStart` for every owned status, or a Stop would never clear the turn start).
 - The turn start lives in memory, so a status that changes twice between passes (Stop then a new prompt) is seen as one open turn and keeps the old start; Rust's 0.5 s file feed has the same collapse at a finer grain. Accepted; do not add persistence.
