@@ -14,6 +14,7 @@ export interface SessionStatus {
 export interface WindowFolders {
   pid: number
   folders: string[]
+  workspace?: string | null
 }
 
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/

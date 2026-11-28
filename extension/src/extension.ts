@@ -17,6 +17,7 @@ import {
   listReasons,
   reopenAsWorkspace,
   unsafeReasons,
+  workspaceOpenElsewhere,
 } from './autoReopen'
 import type { RevealEnvironment } from './revealSession'
 import { revealSession, versionOf } from './revealSession'
@@ -30,7 +31,7 @@ import {
   sessionIdsUnder,
 } from './processTree'
 import { readStatuses } from './sessionStore'
-import { publishWindow, unpublishWindow } from './windowRegistry'
+import { publishWindow, readWindows, unpublishWindow } from './windowRegistry'
 import { WindowTracker } from './windowTracker'
 import {
   isLegacyWorkspace,
@@ -285,6 +286,21 @@ const autoReopenEnabled = (): boolean =>
     .getConfiguration('aydy')
     .get<boolean>(AUTO_REOPEN_SETTING, true)
 
+/**
+ * Says so when another window already has `folder`'s workspace file open:
+ * reopening this window on it would only focus that window.
+ */
+const announceWorkspaceElsewhere = async (folder: string): Promise<boolean> => {
+  const path = workspaceOpenElsewhere(folder, process.pid, await readWindows())
+  if (path === null) {
+    return false
+  }
+  void vscode.window.showInformationMessage(
+    `AYDY: ${basename(folder)} is already open as a workspace in another window (${tildePath(path)}). That window's tab shows the session count.`,
+  )
+  return true
+}
+
 const settle = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, SETTLE_MS))
 
@@ -299,6 +315,9 @@ const autoReopen = async (folder: string): Promise<void> => {
   }
   await settle()
   if (openWorkspaceFile() !== undefined) {
+    return
+  }
+  if (await announceWorkspaceElsewhere(folder)) {
     return
   }
   const reasons = await reasonsNotToReopen()
@@ -358,6 +377,9 @@ const showCountInTabTitle = async (folders: string[]): Promise<void> => {
     await vscode.window.showInformationMessage(SINGLE_FOLDER_ONLY)
     return
   }
+  if (await announceWorkspaceElsewhere(folder)) {
+    return
+  }
   await openWorkspace(folder)
 }
 
@@ -409,8 +431,22 @@ const localFolders = (): string[] =>
       }
     })
 
+const realWorkspaceFile = (): string | null => {
+  const path = openWorkspaceFile()
+  if (path === undefined) {
+    return null
+  }
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
 const publish = (folders: string[]): void => {
-  publishWindow(process.pid, folders).catch(() => undefined)
+  publishWindow(process.pid, folders, realWorkspaceFile()).catch(
+    () => undefined,
+  )
 }
 
 const unpublish = async (): Promise<void> => {
