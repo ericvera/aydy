@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::session::event::{HookEventKind, SessionId};
+use crate::session::signals::{self, ProgressReport, SignalInputs, WorkSignals};
 use crate::session::status::{SessionStatus, StatusFacts, UNKNOWN_RESOLUTION_WINDOW};
 use crate::session::timing::SessionTiming;
 
@@ -44,6 +45,8 @@ pub struct Session {
     timing: SessionTiming,
     unknown_since: Option<Instant>,
     scan_confirmed: bool,
+    transcript_written_at: Option<Instant>,
+    progress: Option<ProgressReport>,
 }
 
 impl Session {
@@ -68,6 +71,8 @@ impl Session {
             timing: SessionTiming::default(),
             unknown_since: Some(now),
             scan_confirmed: false,
+            transcript_written_at: None,
+            progress: None,
         }
     }
 
@@ -230,6 +235,37 @@ impl Session {
     pub fn unknown_window_elapsed(&self, now: Instant) -> bool {
         self.unknown_since
             .is_some_and(|since| now.saturating_duration_since(since) >= UNKNOWN_RESOLUTION_WINDOW)
+    }
+
+    /// Records when the session's transcripts were last written.
+    ///
+    /// An older reading is ignored, so activity never moves backwards. Like a
+    /// scan, this is not an event: it neither reorders the list nor settles.
+    pub fn record_transcript(&mut self, written_at: Instant) {
+        self.transcript_written_at = Some(
+            self.transcript_written_at
+                .map_or(written_at, |stored| stored.max(written_at)),
+        );
+    }
+
+    /// Replaces the agent's progress report. This is not an event either.
+    pub fn record_progress(&mut self, report: ProgressReport) {
+        self.progress = Some(report);
+    }
+
+    /// The stale and progress signals, which exist only while Working.
+    pub fn work_signals(&self, now: Instant) -> Option<WorkSignals> {
+        (self.status() == SessionStatus::Working).then(|| {
+            signals::derive(
+                SignalInputs {
+                    turn_started_at: self.timing.turn_started_at(),
+                    last_event_at: self.last_event_at,
+                    transcript_written_at: self.transcript_written_at,
+                    progress: self.progress,
+                },
+                now,
+            )
+        })
     }
 
     /// Brings the derived state in line with the facts just recorded.
@@ -628,5 +664,71 @@ mod tests {
         assert_eq!(session.status(), SessionStatus::Done);
         assert_eq!(session.longest_turn(), minutes(3));
         assert_eq!(session.working_time(start + minutes(10)), minutes(3));
+    }
+
+    fn report_at(reported_at: Instant) -> ProgressReport {
+        ProgressReport {
+            reported_at,
+            eta: minutes(10),
+            step: None,
+        }
+    }
+
+    #[test]
+    fn a_stop_with_subagents_running_keeps_the_prompts_turn_start_for_reports() {
+        let start = Instant::now();
+        let mut session = Session::new("session-1".to_string(), start);
+        session.apply_hook(&HookEventKind::UserPromptSubmit, start + minutes(1));
+        session.apply_hook(&HookEventKind::SubagentsRunning, start + minutes(5));
+
+        session.record_progress(report_at(start + minutes(3)));
+        let between = session.work_signals(start + minutes(6)).unwrap();
+        session.record_progress(report_at(start));
+        let before = session.work_signals(start + minutes(6)).unwrap();
+
+        assert!(between.eta.is_some());
+        assert_eq!(between.turn_elapsed, Some(minutes(5)));
+        assert_eq!(before.eta, None);
+    }
+
+    #[test]
+    fn there_are_no_work_signals_unless_working() {
+        let start = Instant::now();
+        let mut session = Session::new("session-1".to_string(), start);
+        assert_eq!(session.work_signals(start), None);
+
+        session.apply_hook(&HookEventKind::UserPromptSubmit, start);
+        assert!(session.work_signals(start).is_some());
+
+        session.apply_hook(&notification("Needs permission"), start + minutes(1));
+        assert_eq!(session.work_signals(start + minutes(1)), None);
+
+        session.apply_hook(&HookEventKind::Stop, start + minutes(2));
+        assert_eq!(session.work_signals(start + minutes(2)), None);
+    }
+
+    #[test]
+    fn an_older_transcript_reading_does_not_move_written_at_backwards() {
+        let start = Instant::now();
+        let mut session = Session::new("session-1".to_string(), start);
+        session.apply_hook(&HookEventKind::UserPromptSubmit, start);
+
+        session.record_transcript(start + minutes(3));
+        session.record_transcript(start + minutes(1));
+
+        let signals = session.work_signals(start + minutes(4)).unwrap();
+        assert_eq!(signals.quiet_for, Some(minutes(1)));
+    }
+
+    #[test]
+    fn recording_progress_or_transcript_is_not_an_event() {
+        let start = Instant::now();
+        let mut session = Session::new("session-1".to_string(), start);
+        session.apply_hook(&HookEventKind::UserPromptSubmit, start);
+
+        session.record_transcript(start + minutes(2));
+        session.record_progress(report_at(start + minutes(3)));
+
+        assert_eq!(session.last_event_at(), start);
     }
 }

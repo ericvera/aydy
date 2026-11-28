@@ -10,6 +10,7 @@ pub mod hook_payload;
 pub mod registry;
 #[allow(clippy::module_inception)]
 pub mod session;
+pub mod signals;
 pub mod status;
 pub mod tab_match;
 pub mod timing;
