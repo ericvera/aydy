@@ -17,20 +17,27 @@ The tray icon is the whole product for most of the day: it has to answer
 The icon shows the **most urgent state present**, so one glance answers the
 question.
 
-| #   | State         | Shape                          | Count            |
-| --- | ------------- | ------------------------------ | ---------------- |
-| 1   | Needs input   | disc with an exclamation mark  | unread sessions  |
-| 2   | Something new | solid disc                     | unread sessions  |
-| 3   | Working       | ring with its left half filled | working sessions |
-| 4   | All quiet     | thin ring                      | none             |
+| #   | State         | Shape                                       | Count            |
+| --- | ------------- | ------------------------------------------- | ---------------- |
+| 1   | Needs input   | disc with an exclamation mark               | unread sessions  |
+| 2   | Something new | solid disc                                  | unread sessions  |
+| 3   | Stale         | ring drawn dashed with its left half filled | stale sessions   |
+| 4   | Working       | ring with its left half filled              | working sessions |
+| 5   | All quiet     | thin ring                                   | none             |
 
 1. **Needs input** — at least one **unread** session is waiting on the user.
 2. **Something new** — at least one **unread** session in any other status. This
    is the state the app is named after: work finished while you were away and
    you have not looked yet. It outranks working, because working is the state
    you already expect.
-3. **Working** — something is running and nothing is waiting to be looked at.
-4. **All quiet** — nothing needs attention.
+3. **Stale** — a Working session has written nothing to its transcript,
+   subagent transcripts included, for 5 minutes. Stale is a signal beside the
+   status, not a status: the session is still Working. It ranks below anything
+   unread, because a stuck session matters less than one already waiting on
+   you. While a session is stale the icon gives up the working count; the
+   popover still shows it.
+4. **Working** — something is running and nothing is waiting to be looked at.
+5. **All quiet** — nothing needs attention.
 
 **A session that has been read never raises the icon above working**, even while
 its status is still Needs input. Reading is what makes the amber state drop;
@@ -42,22 +49,24 @@ state 2.
 
 States 1 and 2 count **unread** sessions — every unread session, not only the
 waiting ones, so the number matches the popover header's `· N new`. State 3
-counts **working** sessions. State 4 carries no count at all.
+counts **stale** sessions, and state 4 counts **working** sessions. State 5
+carries no count at all.
 
 The count is the tray item's title, drawn beside the icon in the menu bar font.
 
 ### Why shape and not colour
 
-The mock draws the four states in status colours. The shipped icons cannot:
+The mock draws the states in status colours. The shipped icons cannot:
 macOS menu bar icons are **template images**, black plus alpha, tinted by the
 system to suit the menu bar they land in — which is what makes an icon legible
 in both a light and a dark menu bar, and in front of any wallpaper. Colour is
-therefore not available to carry meaning, and states 1, 2 and 3 have to be told
+therefore not available to carry meaning, and the five states have to be told
 apart by silhouette. The circle family of the mock is kept; the fill is what
 varies:
 
 - empty ring → nothing to see
 - half-filled ring → part way through
+- half-filled ring drawn dashed → working, but the line has broken up
 - solid disc → finished
 - disc with an exclamation → finished **and** blocked on you
 
