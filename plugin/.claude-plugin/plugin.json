@@ -1,0 +1,8 @@
+{
+  "name": "aydy",
+  "description": "Lets Claude Code sessions report how much work is left to the AYDY menu bar app.",
+  "version": "0.1.0",
+  "author": {
+    "name": "AYDY"
+  }
+}
