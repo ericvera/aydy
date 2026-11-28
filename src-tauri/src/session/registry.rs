@@ -6,12 +6,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::clock::Clock;
-use crate::discovery::status_files::StatusRecord;
+use crate::discovery::status_files::{ProgressRecord, StatusRecord};
 use crate::session::event::{
     HookEvent, HookEventKind, ReconciliationResult, SessionEnrichment, SessionId,
 };
 use crate::session::session::Session;
-use crate::session::signals::WorkSignals;
+use crate::session::signals::{ProgressReport, WorkSignals};
 use crate::session::status::SessionStatus;
 
 /// The label a row falls back to when nothing else is known about a session.
@@ -171,9 +171,7 @@ impl SessionRegistry {
     /// notification is the exception: it asks for nothing, so it neither raises
     /// nor withdraws attention.
     pub fn apply_status(&mut self, record: StatusRecord, now_ms: u64) {
-        let now = self.clock.now();
-        let age = Duration::from_millis(now_ms.saturating_sub(record.written_at_ms));
-        let at = now.checked_sub(age).unwrap_or(now);
+        let at = self.recorded_at(record.written_at_ms, now_ms);
         let session_id = record.event.session_id.clone();
         let attention = match record.event.kind {
             HookEventKind::Stop | HookEventKind::Notification { .. } => {
@@ -188,6 +186,30 @@ impl SessionRegistry {
         if let (Some(attention), Some(session)) = (attention, self.sessions.get_mut(&session_id)) {
             session.attention_at_ms = attention;
         }
+    }
+
+    /// Applies a progress report as of when it was written, returning `false`
+    /// without change when the session is not tracked: a progress file never
+    /// creates a session.
+    pub fn apply_progress(&mut self, record: ProgressRecord, now_ms: u64) -> bool {
+        let reported_at = self.recorded_at(record.written_at_ms, now_ms);
+        let Some(session) = self.sessions.get_mut(&record.session_id) else {
+            return false;
+        };
+
+        session.record_progress(ProgressReport {
+            reported_at,
+            eta: record.eta,
+            step: record.step,
+        });
+        true
+    }
+
+    fn recorded_at(&self, written_at_ms: u64, now_ms: u64) -> Instant {
+        let now = self.clock.now();
+        let age = Duration::from_millis(now_ms.saturating_sub(written_at_ms));
+
+        now.checked_sub(age).unwrap_or(now)
     }
 
     /// Records that a session was seen at `seen_at_ms`, keeping the latest
@@ -1827,5 +1849,37 @@ mod tests {
         let snapshot = registry.snapshot();
         assert_eq!(snapshot.groups.len(), 1);
         assert_eq!(ids(&snapshot), vec!["session-2", "session-1"]);
+    }
+
+    fn progress(session_id: &str, written_at_ms: u64) -> ProgressRecord {
+        ProgressRecord {
+            session_id: session_id.to_string(),
+            eta: minutes(6),
+            step: None,
+            written_at_ms,
+        }
+    }
+
+    #[test]
+    fn progress_for_an_unknown_session_creates_nothing() {
+        let (_clock, mut registry) = dated_registry();
+
+        assert!(!registry.apply_progress(progress("session-1", NOW_MS), NOW_MS));
+        assert_eq!(registry.snapshot().session_count, 0);
+    }
+
+    #[test]
+    fn progress_for_a_known_session_is_applied() {
+        let (_clock, mut registry) = dated_registry();
+        registry.apply_status(
+            status("session-1", HookEventKind::UserPromptSubmit, NOW_MS - 1_000),
+            NOW_MS,
+        );
+
+        assert!(registry.apply_progress(progress("session-1", NOW_MS), NOW_MS));
+        let signals = find(&registry.snapshot(), "session-1")
+            .signals
+            .expect("a Working session to carry signals");
+        assert!(signals.eta.is_some());
     }
 }
